@@ -1,0 +1,25 @@
+
+name: "manual-input-workflow"
+
+on:
+  workflow_dispatch:
+    input:
+      name:
+
+        description: "Branches to revert"
+
+        default:  "World"
+
+        required: true
+
+
+jobs:
+
+  check_inputs:
+    runs-on: "ubantu-latest"
+
+    steps:
+
+    - name: Printing greeting
+
+      run: echo "Hello how are you doing"

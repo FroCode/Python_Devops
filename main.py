@@ -29,4 +29,3 @@ arr2 = [2, 4, 6, 8]
 
 merged = merge_sorted_arrays(arr1, arr2)
 print(merged)  # Output: [1, 2, 3, 4, 5, 6, 7, 8]
-
