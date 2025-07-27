@@ -1,25 +1,55 @@
-
-name: "manual-input-workflow"
+name: manual-revert-workflow
 
 on:
   workflow_dispatch:
-    input:
-      name:
-
-        description: "Branches to revert"
-
-        default:  "World"
-
+    inputs:
+      branch_name:
+        description: "Branch name to find and revert its merge commit in dev"
         required: true
 
-
 jobs:
-
-  check_inputs:
-    runs-on: "ubantu-latest"
-
+  revert-merge:
+    runs-on: ubuntu-latest
+    
     steps:
-
-    - name: Printing greeting
-
-      run: echo "Hello how are you doing"
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history for proper commit lookup
+        
+    - name: Validate branch exists
+      run: |
+        if ! git show-ref --quiet refs/heads/${{ github.event.inputs.branch_name }}; then
+          echo "Error: Branch '${{ github.event.inputs.branch_name }}' does not exist"
+          exit 1
+        fi
+        
+    - name: Switch to dev branch
+      run: git checkout dev
+      
+    - name: Find merge commit
+      id: find_merge
+      run: |
+        MERGE_COMMIT=$(git log --merges --first-parent dev --grep="Merge branch '${{ github.event.inputs.branch_name }}' into dev" --pretty=%H -n 1)
+        if [ -z "$MERGE_COMMIT" ]; then
+          echo "Error: No merge commit found from branch '${{ github.event.inputs.branch_name }}' into dev"
+          exit 1
+        fi
+        echo "merge_commit=$MERGE_COMMIT" >> $GITHUB_OUTPUT
+        
+    - name: Revert merge commit
+      run: |
+        git revert -m 1 ${{ steps.find_merge.outputs.merge_commit }} --no-edit
+        if [ $? -ne 0 ]; then
+          echo "Error: Failed to revert merge commit ${{ steps.find_merge.outputs.merge_commit }}"
+          exit 1
+        fi
+        
+    - name: Push revert to dev
+      run: |
+        git push origin dev
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Notify success
+      run: echo "Successfully reverted merge commit ${{ steps.find_merge.outputs.merge_commit }} from branch '${{ github.event.inputs.branch_name }}' in dev"
