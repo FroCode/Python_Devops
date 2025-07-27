@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       branch_name:
-        description: "Branch name to find and revert its merge commit in dev (e.g., f2 or f3)"
+        description: "Branch name to find and revert its merge commit in dev (e.g., f5)"
         required: true
 
 jobs:
@@ -38,21 +38,46 @@ jobs:
     - name: Switch to dev branch
       run: git checkout dev
       
-    - name: Find merge commit
-      id: find_merge
+    - name: Debug merge commits
+      run: |
+        echo "Listing merge commits in dev:"
+        git log --merges --first-parent dev --oneline
+        
+    - name: Find merge commit or commits from branch
+      id: find_commits
       run: |
         MERGE_COMMIT=$(git log --merges --first-parent dev --grep="Merge branch '${{ steps.normalize.outputs.normalized_branch }}' into dev" --pretty=%H -n 1)
         if [ -z "$MERGE_COMMIT" ]; then
-          echo "Error: No merge commit found from branch '${{ steps.normalize.outputs.normalized_branch }}' into dev"
-          exit 1
+          echo "No merge commit found. Checking for commits from ${{ steps.normalize.outputs.normalized_branch }}..."
+          COMMITS=$(git log dev --oneline --grep="${{ steps.normalize.outputs.normalized_branch }}" | awk '{print $1}' | head -n 1)
+          if [ -z "$COMMITS" ]; then
+            echo "Error: No merge commit or commits from branch '${{ steps.normalize.outputs.normalized_branch }}' found in dev"
+            exit 1
+          else
+            echo "Found commits from ${{ steps.normalize.outputs.normalized_branch }} (possible fast-forward merge)"
+            echo "commit_to_revert=$COMMITS" >> $GITHUB_OUTPUT
+            echo "is_merge_commit=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "Found merge commit: $MERGE_COMMIT"
+          echo "commit_to_revert=$MERGE_COMMIT" >> $GITHUB_OUTPUT
+          echo "is_merge_commit=true" >> $GITHUB_OUTPUT
         fi
-        echo "merge_commit=$MERGE_COMMIT" >> $GITHUB_OUTPUT
         
-    - name: Revert merge commit
+    - name: Configure Git user
       run: |
-        git revert -m 1 ${{ steps.find_merge.outputs.merge_commit }} --no-edit
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        
+    - name: Revert commit
+      run: |
+        if [ "${{ steps.find_commits.outputs.is_merge_commit }}" = "true" ]; then
+          git revert -m 1 ${{ steps.find_commits.outputs.commit_to_revert }} --no-edit
+        else
+          git revert ${{ steps.find_commits.outputs.commit_to_revert }} --no-edit
+        fi
         if [ $? -ne 0 ]; then
-          echo "Error: Failed to revert merge commit ${{ steps.find_merge.outputs.merge_commit }}"
+          echo "Error: Failed to revert commit ${{ steps.find_commits.outputs.commit_to_revert }}"
           exit 1
         fi
         
@@ -63,4 +88,4 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Notify success
-      run: echo "Successfully reverted merge commit ${{ steps.find_merge.outputs.merge_commit }} from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
+      run: echo "Successfully reverted commit ${{ steps.find_commits.outputs.commit_to_revert }} from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
