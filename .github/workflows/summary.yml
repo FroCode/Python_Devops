@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       branch_name:
-        description: "Branch name to find and revert its merge commit in dev"
+        description: "Branch name to find and revert its merge commit in dev (e.g., f2 or f3)"
         required: true
 
 jobs:
@@ -12,17 +12,26 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
         fetch-depth: 0  # Fetch all history for proper commit lookup
-    - name: CHeck all branches
-      run: git branch -a  
+        
+    - name: List all branches for debugging
+      run: git branch -a
+      
+    - name: Normalize branch name
+      id: normalize
+      run: |
+        # Strip 'remotes/origin/' prefix if present, otherwise use input as-is
+        BRANCH_NAME=$(echo "${{ github.event.inputs.branch_name }}" | sed 's#^remotes/origin/##')
+        echo "normalized_branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+        
     - name: Validate branch exists
       run: |
-        if ! git show-ref --quiet refs/heads/${{ github.event.inputs.branch_name }}; then
-          echo "Error: Branch '${{ github.event.inputs.branch_name }}' does not exist"
+        if ! git show-ref --quiet refs/remotes/origin/${{ steps.normalize.outputs.normalized_branch }}; then
+          echo "Error: Remote branch 'origin/${{ steps.normalize.outputs.normalized_branch }}' does not exist. Available branches:"
+          git branch -a
           exit 1
         fi
         
@@ -32,9 +41,9 @@ jobs:
     - name: Find merge commit
       id: find_merge
       run: |
-        MERGE_COMMIT=$(git log --merges --first-parent dev --grep="Merge branch '${{ github.event.inputs.branch_name }}' into dev" --pretty=%H -n 1)
+        MERGE_COMMIT=$(git log --merges --first-parent dev --grep="Merge branch '${{ steps.normalize.outputs.normalized_branch }}' into dev" --pretty=%H -n 1)
         if [ -z "$MERGE_COMMIT" ]; then
-          echo "Error: No merge commit found from branch '${{ github.event.inputs.branch_name }}' into dev"
+          echo "Error: No merge commit found from branch '${{ steps.normalize.outputs.normalized_branch }}' into dev"
           exit 1
         fi
         echo "merge_commit=$MERGE_COMMIT" >> $GITHUB_OUTPUT
@@ -54,4 +63,4 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Notify success
-      run: echo "Successfully reverted merge commit ${{ steps.find_merge.outputs.merge_commit }} from branch '${{ github.event.inputs.branch_name }}' in dev"
+      run: echo "Successfully reverted merge commit ${{ steps.find_merge.outputs.merge_commit }} from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
