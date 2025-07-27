@@ -16,6 +16,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false  # VERY IMPORTANT to disable default token
+      - name: Setup authenticated remote
+        run: |
+          git remote set-url origin https://x-access-token:${{ secrets.PAT }}@github.com/${{ github.repository }}.git
 
       - name: Ensure dev branch exists locally
         run: |
