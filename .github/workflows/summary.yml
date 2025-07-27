@@ -1,4 +1,4 @@
-name: Revert last merge (or squash) from branch into dev
+name: Revert last merge
 
 on:
   workflow_dispatch:
