@@ -1,4 +1,4 @@
-name: Revert last merge
+name: Revert last merge or commits from branch into dev
 
 on:
   workflow_dispatch:
@@ -11,12 +11,11 @@ jobs:
   revert:
     runs-on: ubuntu-latest
     steps:
-      # Fetch all history so we can analyze merge commits
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: false  # VERY IMPORTANT to disable default token
 
       - name: Ensure dev branch exists locally
         run: |
@@ -45,17 +44,17 @@ jobs:
           echo "ref_sha=$SHA" >> $GITHUB_OUTPUT
           echo "Resolved ref to $SHA"
 
-      - name: Find and revert last merge from that branch
+      - name: Revert last merge or commits from branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT }}   # Export PAT for git commands
         run: |
           TARGET_SHA=${{ steps.resolve_ref.outputs.ref_sha }}
 
-          # Get merge-base
           MERGE_BASE=$(git merge-base dev $TARGET_SHA)
           echo "Merge base between dev and target: $MERGE_BASE"
 
           MERGE_COMMIT=""
 
-          # Try to find a merge commit
           for COMMIT in $(git log --merges --first-parent dev --pretty=%H); do
             SECOND_PARENT=$(git rev-list --parents -n 1 $COMMIT | awk '{print $3}')
             if [ -n "$SECOND_PARENT" ] && git merge-base --is-ancestor $SECOND_PARENT $TARGET_SHA; then
@@ -97,6 +96,5 @@ jobs:
             git revert -m 1 --no-edit "$MERGE_COMMIT"
           fi
 
-          # Use PAT to authenticate before pushing
           git remote set-url origin https://x-access-token:${{ secrets.PAT }}@github.com/${{ github.repository }}.git
           git push origin dev
