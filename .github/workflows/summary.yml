@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+    - name: CHeck all branches
+      run: git branch -a  
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
