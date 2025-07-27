@@ -1,22 +1,23 @@
-name: Revert last merge from branch into dev
+name: Revert last merge (or squash) from branch into dev
 
 on:
   workflow_dispatch:
     inputs:
       branch_to_revert:
-        description: 'Branch name or ref to revert (merged into dev)'
+        description: 'Branch name (without origin/) that was merged into dev'
         required: true
 
 jobs:
   revert:
     runs-on: ubuntu-latest
     steps:
+      # Fetch all history so we can analyze merge commits
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Ensure dev branch is fetched
+      - name: Ensure dev branch exists locally
         run: |
           git fetch origin dev:dev
 
@@ -29,28 +30,31 @@ jobs:
           echo "normalized_branch=$REF" >> $GITHUB_OUTPUT
           echo "Target branch/ref: $REF"
 
-      - name: Resolve branch or ref to commit SHA
+      - name: Resolve ref to SHA
         id: resolve_ref
         run: |
           REF="${{ steps.normalize.outputs.normalized_branch }}"
           if ! SHA=$(git rev-parse --verify --quiet "$REF"); then
             if ! SHA=$(git rev-parse --verify --quiet "origin/$REF"); then
-              echo "Error: Ref '$REF' not found (neither local nor origin/$REF)."
+              echo "Error: Ref '$REF' not found."
               git branch -a
               exit 1
             fi
           fi
           echo "ref_sha=$SHA" >> $GITHUB_OUTPUT
-          echo "Resolved $REF to $SHA"
+          echo "Resolved ref to $SHA"
 
-      - name: Find last merge commit from branch into dev
-        id: find_merge
+      - name: Find and revert last merge from that branch
         run: |
           TARGET_SHA=${{ steps.resolve_ref.outputs.ref_sha }}
+
+          # Get merge-base
           MERGE_BASE=$(git merge-base dev $TARGET_SHA)
-          MERGE_COMMIT=""
           echo "Merge base between dev and target: $MERGE_BASE"
 
+          MERGE_COMMIT=""
+
+          # Try to find a merge commit
           for COMMIT in $(git log --merges --first-parent dev --pretty=%H); do
             SECOND_PARENT=$(git rev-list --parents -n 1 $COMMIT | awk '{print $3}')
             if [ -n "$SECOND_PARENT" ] && git merge-base --is-ancestor $SECOND_PARENT $TARGET_SHA; then
@@ -61,31 +65,36 @@ jobs:
             fi
           done
 
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git checkout dev
+
           if [ -z "$MERGE_COMMIT" ]; then
             echo "No explicit merge commit found. Assuming squash or fast-forward."
             echo "Collecting commits from branch since merge base..."
-            COMMITS=$(git log dev ^$MERGE_BASE --pretty=%H --ancestry-path $MERGE_BASE..dev)
+
+            # List commits from oldest to newest
+            COMMITS=$(git log dev ^$MERGE_BASE --pretty=%H --ancestry-path $MERGE_BASE..dev | tac)
+
             if [ -z "$COMMITS" ]; then
               echo "Error: No commits to revert"
               exit 1
             fi
-            # Revert each commit individually
+
             for C in $COMMITS; do
-              echo "Reverting $C"
-              git revert --no-edit $C
+              PARENTS=$(git rev-list --parents -n 1 $C)
+              COUNT=$(echo "$PARENTS" | wc -w)
+              if [ "$COUNT" -gt 2 ]; then
+                echo "Reverting merge commit $C"
+                git revert -m 1 --no-edit "$C"
+              else
+                echo "Reverting commit $C"
+                git revert --no-edit "$C"
+              fi
             done
           else
             echo "Found merge commit: $MERGE_COMMIT"
             git revert -m 1 --no-edit "$MERGE_COMMIT"
           fi
 
-
-      - name: Revert the merge commit on dev
-        run: |
-          COMMIT=${{ steps.find_merge.outputs.merge_commit }}
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-          git checkout dev
-          git revert -m 1 --no-edit "$COMMIT"
           git push origin dev
