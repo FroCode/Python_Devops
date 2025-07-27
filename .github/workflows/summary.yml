@@ -46,8 +46,6 @@ jobs:
 
       - name: Find and revert last merge from that branch
         run: |
-              - name: Find and revert last merge from that branch
-        run: |
           TARGET_SHA=${{ steps.resolve_ref.outputs.ref_sha }}
 
           # Get merge-base
