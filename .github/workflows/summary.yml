@@ -46,6 +46,8 @@ jobs:
 
       - name: Find and revert last merge from that branch
         run: |
+              - name: Find and revert last merge from that branch
+        run: |
           TARGET_SHA=${{ steps.resolve_ref.outputs.ref_sha }}
 
           # Get merge-base
@@ -73,7 +75,6 @@ jobs:
             echo "No explicit merge commit found. Assuming squash or fast-forward."
             echo "Collecting commits from branch since merge base..."
 
-            # List commits from oldest to newest
             COMMITS=$(git log dev ^$MERGE_BASE --pretty=%H --ancestry-path $MERGE_BASE..dev | tac)
 
             if [ -z "$COMMITS" ]; then
@@ -97,4 +98,6 @@ jobs:
             git revert -m 1 --no-edit "$MERGE_COMMIT"
           fi
 
+          # Use PAT to authenticate before pushing
+          git remote set-url origin https://x-access-token:${{ secrets.PAT }}@github.com/${{ github.repository }}.git
           git push origin dev
