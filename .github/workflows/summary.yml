@@ -16,6 +16,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0  # Fetch all history for proper commit lookup
+        token: ${{ secrets.PAT }}  # Use PAT for checkout to ensure push permissions
         
     - name: List all branches for debugging
       run: git branch -a
@@ -83,9 +84,16 @@ jobs:
         
     - name: Push revert to dev
       run: |
+        # Configure HTTPS URL with PAT
+        REPO_URL="https://${{ secrets.PAT }}@github.com/FroCode/Python_Devops.git"
+        git remote set-url origin "$REPO_URL"
         git push origin dev
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GIT_AUTHOR_NAME: "GitHub Actions"
+        GIT_AUTHOR_EMAIL: "actions@github.com"
+        # Use PAT for authentication
+        GIT_ASKPASS: /bin/echo
+      continue-on-error: false
         
     - name: Notify success
       run: echo "Successfully reverted commit ${{ steps.find_commits.outputs.commit_to_revert }} from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
