@@ -43,6 +43,8 @@ jobs:
       run: |
         echo "Listing merge commits in dev:"
         git log --merges --first-parent dev --oneline --graph
+        echo "Current commit on dev:"
+        git log -1 --oneline
         
     - name: Find last merge commit or commits
       id: find_commits
@@ -65,7 +67,7 @@ jobs:
             echo "Error: No merge commit or commits from branch '${{ steps.normalize.outputs.normalized_branch }}' found in dev"
             exit 1
           else
-            echo "Found commits from ${{ steps.normalize.outputs.normalized_branch }}: $COMMITS"
+            echo "Found commit from ${{ steps.normalize.outputs.normalized_branch }}: $COMMITS"
             echo "commit_to_revert=$COMMITS" >> $GITHUB_OUTPUT
             echo "is_merge_commit=false" >> $GITHUB_OUTPUT
           fi
@@ -74,33 +76,54 @@ jobs:
           echo "commit_to_revert=$MERGE_COMMIT" >> $GITHUB_OUTPUT
           echo "is_merge_commit=true" >> $GITHUB_OUTPUT
         fi
+        echo "Commit details:"
+        git show --summary ${{ steps.find_commits.outputs.commit_to_revert }}
         
     - name: Configure Git user
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         
-    - name: Revert commit
+    - name: Attempt revert commit
+      id: revert
       run: |
+        echo "Attempting to revert commit ${{ steps.find_commits.outputs.commit_to_revert }}"
         if [ "${{ steps.find_commits.outputs.is_merge_commit }}" = "true" ]; then
-          echo "Reverting merge commit ${{ steps.find_commits.outputs.commit_to_revert }}"
-          git revert -m 1 ${{ steps.find_commits.outputs.commit_to_revert }} --no-edit
+          git revert -m 1 --no-commit ${{ steps.find_commits.outputs.commit_to_revert }}
         else
-          echo "Reverting commit ${{ steps.find_commits.outputs.commit_to_revert }} (non-merge)"
-          git revert ${{ steps.find_commits.outputs.commit_to_revert }} --no-edit
+          git revert --no-commit ${{ steps.find_commits.outputs.commit_to_revert }}
         fi
-        if [ $? -ne 0 ]; then
-          echo "Error: Failed to revert commit ${{ steps.find_commits.outputs.commit_to_revert }}"
-          exit 1
+        if git status | grep -q "You have unmerged paths"; then
+          echo "Merge conflict detected during revert"
+          echo "has_conflict=true" >> $GITHUB_OUTPUT
+        else
+          git commit -m "Revert commit ${{ steps.find_commits.outputs.commit_to_revert }} from ${{ steps.normalize.outputs.normalized_branch }}"
+          echo "has_conflict=false" >> $GITHUB_OUTPUT
         fi
+      continue-on-error: true
         
-    - name: Push revert to dev
+    - name: Handle revert result
       run: |
-        git remote set-url origin https://${{ secrets.PAT }}@github.com/FroCode/Python_Devops.git
-        git push origin dev
+        if [ "${{ steps.revert.outputs.has_conflict }}" = "true" ]; then
+          echo "Creating branch for conflict resolution"
+          REVERT_BRANCH="revert-${{ steps.normalize.outputs.normalized_branch }}-$(date +%s)"
+          git checkout -b "$REVERT_BRANCH"
+          git add .
+          git commit -m "Staged revert of ${{ steps.find_commits.outputs.commit_to_revert }} with conflicts"
+          git remote set-url origin https://${{ secrets.PAT }}@github.com/FroCode/Python_Devops.git
+          git push origin "$REVERT_BRANCH"
+          echo "Pushed to branch $REVERT_BRANCH for manual conflict resolution"
+          echo "Please resolve conflicts in branch $REVERT_BRANCH and create a PR to dev"
+          exit 1
+        else
+          echo "No conflicts, pushing to dev"
+          git remote set-url origin https://${{ steps.PAT }}@github.com/FroCode/Python_Devops.git
+          git push origin dev
+        fi
       env:
         GIT_AUTHOR_NAME: "GitHub Actions"
         GIT_AUTHOR_EMAIL: "actions@github.com"
         
     - name: Notify success
+      if: steps.revert.outputs.has_conflict != 'true'
       run: echo "Successfully reverted commit ${{ steps.find_commits.outputs.commit_to_revert }} from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
