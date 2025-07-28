@@ -31,3 +31,4 @@ merged = merge_sorted_arrays(arr1, arr2)
 print(merged)  # Output: [1, 2, 3, 4, 5, 6, 7, 8]
 # This is an f5 feature edit
 # second commit f5
+# Feature 7 added
