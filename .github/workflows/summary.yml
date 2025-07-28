@@ -45,6 +45,8 @@ jobs:
         git log --merges --first-parent dev --oneline --graph
         echo "Current commit on dev:"
         git log -1 --oneline
+        echo "Commits from ${{ steps.normalize.outputs.normalized_branch }} in dev:"
+        git log dev ^$(git rev-parse origin/dev^) --no-merges --oneline --first-parent origin/${{ steps.normalize.outputs.normalized_branch }}
         
     - name: Find last merge commit or commits
       id: find_commits
@@ -104,25 +106,39 @@ jobs:
         
     - name: Handle revert result
       run: |
+        REVERT_BRANCH="revert-${{ steps.normalize.outputs.normalized_branch }}-$(date +%s)"
         if [ "${{ steps.revert.outputs.has_conflict }}" = "true" ]; then
-          echo "Creating branch for conflict resolution"
-          REVERT_BRANCH="revert-${{ steps.normalize.outputs.normalized_branch }}-$(date +%s)"
+          echo "Creating branch for conflict resolution: $REVERT_BRANCH"
           git checkout -b "$REVERT_BRANCH"
           git add .
           git commit -m "Staged revert of ${{ steps.find_commits.outputs.commit_to_revert }} with conflicts"
           git remote set-url origin https://${{ secrets.PAT }}@github.com/FroCode/Python_Devops.git
           git push origin "$REVERT_BRANCH"
           echo "Pushed to branch $REVERT_BRANCH for manual conflict resolution"
-          echo "Please resolve conflicts in branch $REVERT_BRANCH and create a PR to dev"
-          exit 1
         else
           echo "No conflicts, pushing to dev"
-          git remote set-url origin https://${{ steps.PAT }}@github.com/FroCode/Python_Devops.git
+          git remote set-url origin https://${{ secrets.PAT }}@github.com/FroCode/Python_Devops.git
           git push origin dev
         fi
       env:
         GIT_AUTHOR_NAME: "GitHub Actions"
         GIT_AUTHOR_EMAIL: "actions@github.com"
+        
+    - name: Create pull request for conflicts
+      if: steps.revert.outputs.has_conflict == 'true'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.PAT }}
+        commit-message: "Revert commit ${{ steps.find_commits.outputs.commit_to_revert }} from ${{ steps.normalize.outputs.normalized_branch }} with conflicts"
+        title: "Revert ${{ steps.normalize.outputs.normalized_branch }} merge into dev (with conflicts)"
+        body: |
+          This PR attempts to revert commit ${{ steps.find_commits.outputs.commit_to_revert }} from ${{ steps.normalize.outputs.normalized_branch }}.
+          Merge conflicts occurred in the revert process. Please resolve conflicts in the files listed below and merge this PR into dev.
+          Run `git checkout revert-${{ steps.normalize.outputs.normalized_branch }}-$(date +%s)` and resolve conflicts in:
+          - main.py
+          After resolving, run `git add main.py` and `git revert --continue` to complete the revert.
+        branch: revert-${{ steps.normalize.outputs.normalized_branch }}-$(date +%s)
+        base: dev
         
     - name: Notify success
       if: steps.revert.outputs.has_conflict != 'true'
