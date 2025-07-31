@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       branch_name:
-        description: "Branch name whose pull request merge commit to revert in dev (e.g., f15)"
+        description: "Branch name whose squash commit from a pull request to revert in dev (e.g., f15)"
         required: true
 
 jobs:
-  revert-merge:
+  revert-squash:
     runs-on: ubuntu-latest
 
     steps:
@@ -39,44 +39,38 @@ jobs:
     - name: Switch to dev branch
       run: git checkout dev
 
-    - name: Debug merge commits
+    - name: Debug commits
       run: |
-        echo "Listing merge commits in dev:"
-        git log --merges --first-parent dev --oneline --graph
+        echo "Listing squash commits in dev:"
+        git log --grep="Merge pull request .* from .*${{ steps.normalize.outputs.normalized_branch }}" dev --oneline --graph
         echo "Current commit on dev:"
         git log -1 --oneline
 
-    - name: Find merge commit for PR
-      id: find_merge_commit
+    - name: Find squash commit for PR
+      id: find_squash_commit
       run: |
-        MERGE_COMMIT=""
-        for COMMIT in $(git log --merges --first-parent dev --pretty=%H); do
+        SQUASH_COMMIT=""
+        for COMMIT in $(git log dev --pretty=%H); do
           COMMIT_MESSAGE=$(git log --format=%B -n 1 $COMMIT)
           if echo "$COMMIT_MESSAGE" | grep -q "Merge pull request .* from .*${{ steps.normalize.outputs.normalized_branch }}"; then
-            # Verify it's a merge commit (has at least two parents)
-            PARENT_COUNT=$(git rev-list --parents -n 1 $COMMIT | wc -w)
-            if [ "$PARENT_COUNT" -lt 2 ]; then
-              echo "Error: Commit $COMMIT matches PR message but is not a merge commit."
-              exit 1
-            fi
-            MERGE_COMMIT=$COMMIT
+            SQUASH_COMMIT=$COMMIT
             break
           fi
         done
-        if [ -z "$MERGE_COMMIT" ]; then
-          echo "Error: No merge commit found for a pull request from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
+        if [ -z "$SQUASH_COMMIT" ]; then
+          echo "Error: No squash commit found for a pull request from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
           exit 1
         fi
-        # Check if the merge commit was already reverted
-        if git log --grep="Revert merge commit $MERGE_COMMIT" dev --oneline | grep -q .; then
-          echo "Error: Merge commit $MERGE_COMMIT from branch '${{ steps.normalize.outputs.normalized_branch }}' has already been reverted."
-          git log --grep="Revert merge commit $MERGE_COMMIT" dev --oneline
+        # Check if the squash commit was already reverted
+        if git log --grep="Revert.*$SQUASH_COMMIT" dev --oneline | grep -q .; then
+          echo "Error: Squash commit $SQUASH_COMMIT from branch '${{ steps.normalize.outputs.normalized_branch }}' has already been reverted."
+          git log --grep="Revert.*$SQUASH_COMMIT" dev --oneline
           exit 1
         fi
-        echo "Found merge commit: $MERGE_COMMIT"
-        echo "commit_to_revert=$MERGE_COMMIT" >> $GITHUB_OUTPUT
+        echo "Found squash commit: $SQUASH_COMMIT"
+        echo "commit_to_revert=$SQUASH_COMMIT" >> $GITHUB_OUTPUT
         echo "Commit details:"
-        git show --summary $MERGE_COMMIT
+        git show --summary $SQUASH_COMMIT
 
     - name: Configure Git user
       run: |
@@ -86,18 +80,18 @@ jobs:
     - name: Attempt revert commit
       id: revert
       run: |
-        echo "Attempting to revert merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }}"
+        echo "Attempting to revert squash commit ${{ steps.find_squash_commit.outputs.commit_to_revert }}"
         set +e  # Disable exit-on-error to capture revert output
-        REVERT_OUTPUT=$(git revert -m 1 --no-commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} 2>&1)
+        REVERT_OUTPUT=$(git revert --no-commit ${{ steps.find_squash_commit.outputs.commit_to_revert }} 2>&1)
         REVERT_STATUS=$?
         set -e  # Re-enable exit-on-error
         if [ $REVERT_STATUS -ne 0 ]; then
-          echo "Error: Failed to revert commit ${{ steps.find_merge_commit.outputs.commit_to_revert }}: $REVERT_OUTPUT"
+          echo "Error: Failed to revert commit ${{ steps.find_squash_commit.outputs.commit_to_revert }}: $REVERT_OUTPUT"
           git revert --abort || true
           exit 1
         fi
         if git status --porcelain | grep -q "^[ADRU]"; then
-          git commit -m "Revert merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} from pull request of ${{ steps.normalize.outputs.normalized_branch }}"
+          git commit -m "Revert squash commit ${{ steps.find_squash_commit.outputs.commit_to_revert }} from pull request of ${{ steps.normalize.outputs.normalized_branch }}"
           echo "has_changes=true" >> $GITHUB_OUTPUT
           echo "revert_output=" >> $GITHUB_OUTPUT
         else
@@ -115,7 +109,7 @@ jobs:
           REVERT_BRANCH="revert-${{ steps.normalize.outputs.normalized_branch }}-${{ github.run_id }}"
           git checkout -b "$REVERT_BRANCH"
           git push origin "$REVERT_BRANCH"
-          gh pr create --base dev --head "$REVERT_BRANCH" --title "Revert merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} from ${{ steps.normalize.outputs.normalized_branch }}" --body "Automated revert of merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} from pull request of ${{ steps.normalize.outputs.normalized_branch }}"
+          gh pr create --base dev --head "$REVERT_BRANCH" --title "Revert squash commit ${{ steps.find_squash_commit.outputs.commit_to_revert }} from ${{ steps.normalize.outputs.normalized_branch }}" --body "Automated revert of squash commit ${{ steps.find_squash_commit.outputs.commit_to_revert }} from pull request of ${{ steps.normalize.outputs.normalized_branch }}"
         else
           echo "Error: No changes to commit after revert attempt. See previous step for details."
           exit 1
@@ -125,4 +119,4 @@ jobs:
 
     - name: Notify success
       if: steps.revert.outputs.has_changes == 'true'
-      run: echo "Successfully created PR to revert merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
+      run: echo "Successfully created PR to revert squash commit ${{ steps.find_squash_commit.outputs.commit_to_revert }} from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
