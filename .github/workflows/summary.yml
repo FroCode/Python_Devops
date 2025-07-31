@@ -28,14 +28,6 @@ jobs:
         BRANCH_NAME=$(echo "${{ github.event.inputs.branch_name }}" | sed 's#^remotes/origin/##')
         echo "normalized_branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
         
-    - name: Validate branch exists
-      run: |
-        if ! git show-ref --quiet refs/remotes/origin/${{ steps.normalize.outputs.normalized_branch }}; then
-          echo "Error: Remote branch 'origin/${{ steps.normalize.outputs.normalized_branch }}' does not exist. Available branches:"
-          git branch -a
-          exit 1
-        fi
-        
     - name: Switch to dev branch
       run: git checkout dev
       
