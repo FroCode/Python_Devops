@@ -77,7 +77,6 @@ jobs:
           git revert --no-commit $COMMIT
           STATUS=$?
           set -e
-
           if [ $STATUS -ne 0 ]; then
             echo "Conflict detected for $COMMIT"
 
@@ -85,19 +84,17 @@ jobs:
             git revert --abort || true
             git checkout -b "$BRANCH"
 
-            echo "PR auto-created due to conflict while reverting $COMMIT from feature '${{ steps.normalize.outputs.normalized_branch }}'" > REVERT_CONFLICT.md
-            git add REVERT_CONFLICT.md
-            git commit -m "Conflict during revert of $COMMIT from feature ${{ steps.normalize.outputs.normalized_branch }}"
             git push origin "$BRANCH"
 
             gh pr create \
               --base dev \
               --head "$BRANCH" \
-              --title "Conflict revert for $COMMIT from ${{ steps.normalize.outputs.normalized_branch }}" \
-              --body "This PR was auto-created due to a conflict during reverting squash commit $COMMIT. Please resolve the conflict manually and merge this PR into dev."
+              --title "Conflict while reverting $COMMIT from ${{ steps.normalize.outputs.normalized_branch }}" \
+              --body "Automatic PR: Conflict occurred while reverting commit $COMMIT. Please resolve manually."
 
             continue
           fi
+
 
           if git diff --cached --quiet; then
             echo "Nothing to revert from $COMMIT"
