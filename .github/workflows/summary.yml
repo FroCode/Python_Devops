@@ -78,22 +78,26 @@ jobs:
           STATUS=$?
           set -e
           if [ $STATUS -ne 0 ]; then
-            echo "Conflict detected for $COMMIT"
+          echo "Conflict detected for $COMMIT"
 
-            BRANCH="revert-conflict/${{ steps.normalize.outputs.normalized_branch }}/$SHORT_HASH-$TIMESTAMP"
-            git revert --abort || true
-            git checkout -b "$BRANCH"
+          BRANCH="revert-conflict/${{ steps.normalize.outputs.normalized_branch }}/$SHORT_HASH-$TIMESTAMP"
 
-            git push origin "$BRANCH"
+          # Do NOT abort. We want to preserve the conflicted revert state.
+          git checkout -b "$BRANCH"
 
-            gh pr create \
-              --base dev \
-              --head "$BRANCH" \
-              --title "Conflict while reverting $COMMIT from ${{ steps.normalize.outputs.normalized_branch }}" \
-              --body "Automatic PR: Conflict occurred while reverting commit $COMMIT. Please resolve manually."
+          # Push the conflicted state directly
+          git push origin "$BRANCH"
 
-            continue
-          fi
+          gh pr create \
+            --base dev \
+            --head "$BRANCH" \
+            --title "Conflict while reverting $COMMIT from ${{ steps.normalize.outputs.normalized_branch }}" \
+            --body "This PR contains a conflicted revert for commit $COMMIT. Please resolve the conflicts manually."
+
+          # Stop processing this commit and move on
+          continue
+        fi
+
 
 
           if git diff --cached --quiet; then
