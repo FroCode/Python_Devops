@@ -18,13 +18,6 @@ jobs:
         fetch-depth: 0  # Fetch all history for proper commit lookup
         token: ${{ secrets.PAT }}  # Use PAT for push permissions
 
-    - name: Validate dev branch
-      run: |
-        if ! git show-ref --quiet refs/heads/dev; then
-          echo "Error: 'dev' branch does not exist."
-          exit 1
-        fi
-
     - name: Normalize branch name
       id: normalize
       run: |
