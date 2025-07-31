@@ -54,45 +54,61 @@ jobs:
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
-
+        - name: Revert squash commits
     - name: Revert squash commits
       id: revert
       run: |
-        echo "Attempting to revert:"
-        ANY_CHANGES=false
+        echo "Attempting to revert squash commits..."
         REVERTED=""
+        TIMESTAMP=$(date +%s)
         IFS=$'\n'
         for COMMIT in $(echo "${{ steps.find_squash_commits.outputs.squash_commits }}"); do
+          SHORT_HASH=$(echo "$COMMIT" | cut -c1-7)
+          echo "Processing $COMMIT..."
+
           if git log --grep="Revert.*$COMMIT" dev --oneline | grep -q .; then
-            echo "Skipping $COMMIT: already reverted."
+            echo "Already reverted, skipping."
             continue
           fi
-          echo "Reverting $COMMIT ..."
+
           set +e
           git revert --no-commit $COMMIT
           STATUS=$?
           set -e
+
           if [ $STATUS -ne 0 ]; then
-            echo "Conflict reverting $COMMIT, aborting."
+            echo "Conflict detected for $COMMIT"
+
+            BRANCH="revert-conflict/${{ steps.normalize.outputs.normalized_branch }}/$SHORT_HASH-$TIMESTAMP"
             git revert --abort || true
+            git checkout -b "$BRANCH"
+
+            echo "PR auto-created due to conflict while reverting $COMMIT from feature '${{ steps.normalize.outputs.normalized_branch }}'" > REVERT_CONFLICT.md
+            git add REVERT_CONFLICT.md
+            git commit -m "Conflict during revert of $COMMIT from feature ${{ steps.normalize.outputs.normalized_branch }}"
+            git push origin "$BRANCH"
+
+            gh pr create \
+              --base dev \
+              --head "$BRANCH" \
+              --title "Conflict revert for $COMMIT from ${{ steps.normalize.outputs.normalized_branch }}" \
+              --body "This PR was auto-created due to a conflict during reverting squash commit $COMMIT. Please resolve the conflict manually and merge this PR into dev."
+
             continue
           fi
+
           if git diff --cached --quiet; then
-            echo "No changes from revert (probably already reverted)."
+            echo "Nothing to revert from $COMMIT"
             git reset
           else
-            git commit -m "Revert squash commit $COMMIT (from branch ${{ steps.normalize.outputs.normalized_branch }})"
-            ANY_CHANGES=true
+            git commit -m "Revert squash commit $COMMIT (from ${{ steps.normalize.outputs.normalized_branch }})"
             REVERTED="$REVERTED $COMMIT"
           fi
         done
 
-        if [ "$ANY_CHANGES" = "true" ]; then
+        if [ -n "$REVERTED" ]; then
           echo "has_changes=true" >> $GITHUB_OUTPUT
           echo "reverted_commits=$REVERTED" >> $GITHUB_OUTPUT
-        else
-          echo "No changes made."
-          exit 1
         fi
 
     - name: Push changes
