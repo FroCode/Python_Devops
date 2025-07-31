@@ -18,7 +18,6 @@ jobs:
         fetch-depth: 0  # Fetch all history for proper commit lookup
         token: ${{ secrets.PAT }}  # Use PAT for push permissions
 
-
     - name: Normalize branch name
       id: normalize
       run: |
@@ -63,15 +62,17 @@ jobs:
           exit 1
         fi
         # Check if the commit was already reverted
-        if git log --grep="Revert.*$PR_COMMIT" dev --oneline | grep -q .; then
-          echo "Error: Commit $PR_COMMIT from branch '${{ steps.normalize.outputs.normalized_branch }}' has already been reverted."
-          git log --grep="Revert.*$PR_COMMIT" dev --oneline
+        if git log --grep="Revert.*$PR_COMMIT" dev --oneline | grep -q . || \
+           git log --grep="Revert.*${{ steps.normalize.outputs.normalized_branch }}" dev --oneline | grep -q .; then
+          echo "Error: Commit $PR_COMMIT from branch '${{ steps.normalize.outputs.normalized_branch }}' has likely been reverted."
+          echo "Revert commits found:"
+          git log --grep="Revert" dev --oneline
           exit 1
         fi
         # Determine if it's a merge commit
         PARENT_COUNT=$(git rev-list --parents -n 1 $PR_COMMIT | wc -w)
         if [ "$PARENT_COUNT" -ge 2 ]; then
-          echo "Commit $PR_COMMIT is a merge commit with $PARENT_COUNT parents."
+          echo "Warning: Commit $PR_COMMIT is a merge commit with $PARENT_COUNT parents, expected a squash commit."
           echo "is_merge_commit=true" >> $GITHUB_OUTPUT
         else
           echo "Commit $PR_COMMIT is a single-parent commit (squash or regular)."
