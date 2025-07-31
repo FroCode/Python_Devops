@@ -4,120 +4,93 @@ on:
   workflow_dispatch:
     inputs:
       branch_name:
-        description: "Branch name whose squash commits to revert in dev (e.g., f15)"
+        description: "Feature branch whose last squash merge into dev should be reverted (e.g., f15)"
         required: true
 
 jobs:
-  revert-squash-commits:
+  revert-squash-commit:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        token: ${{ secrets.PAT }}
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT }}
 
-    - name: Normalize branch name
-      id: normalize
-      run: |
-        BRANCH_NAME=$(echo "${{ github.event.inputs.branch_name }}" | sed 's#^remotes/origin/##')
-        if [[ ! "$BRANCH_NAME" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
-          echo "Error: Invalid branch name '$BRANCH_NAME'"
-          exit 1
-        fi
-        echo "normalized_branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
-
-    - name: Switch to dev
-      run: |
-        git fetch origin dev
-        git checkout dev
-        git pull origin dev
-
-    - name: Identify squash commits
-      id: find_squash_commits
-      run: |
-        # Try both: PR merge messages and explicit branch name mentions
-        PATTERN="${{ steps.normalize.outputs.normalized_branch }}"
-        SQUASH_COMMITS=$(git log dev --grep="$PATTERN" --pretty=%H)
-        if [ -z "$SQUASH_COMMITS" ]; then
-          echo "Error: No commits found in dev mentioning '$PATTERN'"
-          exit 1
-        fi
-        echo "Found squash commits:"
-        echo "$SQUASH_COMMITS"
-        echo "squash_commits<<EOF" >> $GITHUB_OUTPUT
-        echo "$SQUASH_COMMITS" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-    - name: Configure Git
-      run: |
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-
-    - name: Revert squash commits
-      id: revert
-      env:
-        GH_TOKEN: ${{secrets.PAT}}
-      run: |
-        echo "Attempting to revert squash commits..."
-        REVERTED=""
-        TIMESTAMP=$(date +%s)
-        IFS=$'\n'
-        for COMMIT in $(echo "${{ steps.find_squash_commits.outputs.squash_commits }}"); do
-          SHORT_HASH=$(echo "$COMMIT" | cut -c1-7)
-          echo "Processing $COMMIT..."
-
-          if git log --grep="Revert.*$COMMIT" dev --oneline | grep -q .; then
-            echo "Already reverted, skipping."
-            continue
+      - name: Normalize branch name
+        id: normalize
+        run: |
+          BRANCH_NAME=$(echo "${{ github.event.inputs.branch_name }}" | sed 's#^remotes/origin/##')
+          if [[ ! "$BRANCH_NAME" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+            echo "Error: Invalid branch name '$BRANCH_NAME'"
+            exit 1
           fi
+          echo "normalized_branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Switch to dev
+        run: |
+          git fetch origin dev
+          git checkout dev
+          git pull origin dev
+
+      - name: Find latest squash merge commit for this branch
+        id: find_commit
+        run: |
+          PATTERN="${{ steps.normalize.outputs.normalized_branch }}"
+          COMMIT=$(git log dev --grep="from .*$PATTERN" --pretty=%H -n 1)
+          if [ -z "$COMMIT" ]; then
+            echo "No squash merge commit found in dev for '$PATTERN'"
+            exit 1
+          fi
+          echo "commit_sha=$COMMIT" >> $GITHUB_OUTPUT
+          echo "Found commit: $COMMIT"
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+      - name: Revert latest squash merge commit
+        id: revert
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+        run: |
+          COMMIT="${{ steps.find_commit.outputs.commit_sha }}"
+          FEATURE="${{ steps.normalize.outputs.normalized_branch }}"
+          SHORT_HASH=$(echo "$COMMIT" | cut -c1-7)
+          TIMESTAMP=$(date +%s)
+
+          echo "Attempting to revert $COMMIT from $FEATURE..."
 
           set +e
-          git revert --no-commit $COMMIT
+          git revert "$COMMIT"
           STATUS=$?
           set -e
+
           if [ $STATUS -ne 0 ]; then
-          echo "Conflict detected for $COMMIT"
+            echo "Conflict detected for $COMMIT"
 
-          BRANCH="revert-conflict/${{ steps.normalize.outputs.normalized_branch }}/$SHORT_HASH-$TIMESTAMP"
+            BRANCH="revert-conflict/$FEATURE/$SHORT_HASH-$TIMESTAMP"
 
-          # Do NOT abort. We want to preserve the conflicted revert state.
-          git checkout -b "$BRANCH"
+            # Do not abort; keep conflict state
+            git checkout -b "$BRANCH"
+            git push origin "$BRANCH"
 
-          # Push the conflicted state directly
-          git push origin "$BRANCH"
+            gh pr create \
+              --base dev \
+              --head "$BRANCH" \
+              --title "Conflict while reverting $COMMIT from $FEATURE" \
+              --body "Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'. Please resolve manually."
 
-          gh pr create \
-            --base dev \
-            --head "$BRANCH" \
-            --title "Conflict while reverting $COMMIT from ${{ steps.normalize.outputs.normalized_branch }}" \
-            --body "This PR contains a conflicted revert for commit $COMMIT. Please resolve the conflicts manually."
-
-          # Stop processing this commit and move on
-          continue
-        fi
-
-
-
-          if git diff --cached --quiet; then
-            echo "Nothing to revert from $COMMIT"
-            git reset
-          else
-            git commit -m "Revert squash commit $COMMIT (from ${{ steps.normalize.outputs.normalized_branch }})"
-            REVERTED="$REVERTED $COMMIT"
+            echo "conflict=true" >> $GITHUB_OUTPUT
+            exit 0
           fi
-        done
 
-        if [ -n "$REVERTED" ]; then
-          echo "has_changes=true" >> $GITHUB_OUTPUT
-          echo "reverted_commits=$REVERTED" >> $GITHUB_OUTPUT
-        fi
-      
+          echo "conflict=false" >> $GITHUB_OUTPUT
 
-    - name: Push changes
-      if: steps.revert.outputs.has_changes == 'true'
-      run: |
-        git pull origin dev --rebase
-        git push origin dev
-        echo "Pushed reverts: ${{ steps.revert.outputs.reverted_commits }}"
+      - name: Push revert to dev
+        if: steps.revert.outputs.conflict == 'false'
+        run: |
+          git pull origin dev --rebase
+          git push origin dev
