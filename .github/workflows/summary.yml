@@ -57,6 +57,8 @@ jobs:
 
     - name: Revert squash commits
       id: revert
+      env:
+        GH_TOKEN: ${{secrets.PAT}}
       run: |
         echo "Attempting to revert squash commits..."
         REVERTED=""
@@ -110,6 +112,7 @@ jobs:
           echo "has_changes=true" >> $GITHUB_OUTPUT
           echo "reverted_commits=$REVERTED" >> $GITHUB_OUTPUT
         fi
+      
 
     - name: Push changes
       if: steps.revert.outputs.has_changes == 'true'
