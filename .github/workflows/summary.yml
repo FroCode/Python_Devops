@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       branch_name:
-        description: "Branch name whose pull request squash commits to revert in dev (e.g., f15)"
+        description: "Branch name whose squash commits to revert in dev (e.g., f15)"
         required: true
 
 jobs:
@@ -15,116 +15,89 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Fetch all history for proper commit lookup
-        token: ${{ secrets.PAT }}  # Use PAT for push permissions
+        fetch-depth: 0
+        token: ${{ secrets.PAT }}
 
     - name: Normalize branch name
       id: normalize
       run: |
         BRANCH_NAME=$(echo "${{ github.event.inputs.branch_name }}" | sed 's#^remotes/origin/##')
-        if [[ ! "$BRANCH_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        if [[ ! "$BRANCH_NAME" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
           echo "Error: Invalid branch name '$BRANCH_NAME'"
           exit 1
         fi
         echo "normalized_branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
 
-    - name: Validate branch exists
+    - name: Switch to dev
       run: |
-        if ! git show-ref --quiet refs/remotes/origin/${{ steps.normalize.outputs.normalized_branch }}; then
-          echo "Error: Remote branch 'origin/${{ steps.normalize.outputs.normalized_branch }}' does not exist. Available branches:"
-          git branch -a
-          exit 1
-        fi
+        git fetch origin dev
+        git checkout dev
+        git pull origin dev
 
-    - name: Switch to dev branch
-      run: git checkout dev
-
-    - name: Debug squash commits
-      run: |
-        echo "Listing squash commits in dev for branch '${{ steps.normalize.outputs.normalized_branch }}':"
-        git log --grep="Merge pull request .* from .*${{ steps.normalize.outputs.normalized_branch }}" dev --oneline --graph
-        echo "Current commit on dev:"
-        git log -1 --oneline
-
-    - name: Find squash commits for PR
+    - name: Identify squash commits
       id: find_squash_commits
       run: |
-        SQUASH_COMMITS=$(git log dev --grep="Merge pull request .* from .*${{ steps.normalize.outputs.normalized_branch }}" --pretty=%H)
+        # Try both: PR merge messages and explicit branch name mentions
+        PATTERN="${{ steps.normalize.outputs.normalized_branch }}"
+        SQUASH_COMMITS=$(git log dev --grep="$PATTERN" --pretty=%H)
         if [ -z "$SQUASH_COMMITS" ]; then
-          echo "Error: No squash commits found for a pull request from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
+          echo "Error: No commits found in dev mentioning '$PATTERN'"
           exit 1
         fi
         echo "Found squash commits:"
-        echo "$SQUASH_COMMITS" | while read -r COMMIT; do
-          echo "- $COMMIT"
-          git show --summary $COMMIT
-          # Verify it's a single-parent commit
-          PARENT_COUNT=$(git rev-list --parents -n 1 $COMMIT | wc -w)
-          if [ "$PARENT_COUNT" -ge 2 ]; then
-            echo "Warning: Commit $COMMIT is a merge commit with $PARENT_COUNT parents, expected a squash commit."
-          fi
-        done
+        echo "$SQUASH_COMMITS"
         echo "squash_commits<<EOF" >> $GITHUB_OUTPUT
         echo "$SQUASH_COMMITS" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
 
-    - name: Configure Git user
+    - name: Configure Git
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
 
-    - name: Attempt revert squash commits
+    - name: Revert squash commits
       id: revert
       run: |
-        echo "Attempting to revert squash commits for branch '${{ steps.normalize.outputs.normalized_branch }}'"
-        REVERTED_COMMITS=""
+        echo "Attempting to revert:"
         ANY_CHANGES=false
-        for COMMIT in ${{ steps.find_squash_commits.outputs.squash_commits }}; do
-          # Check if the commit was already reverted
-          if git log --grep="Revert.*$COMMIT" dev --oneline | grep -q . || \
-             git log --grep="Revert.*${{ steps.normalize.outputs.normalized_branch }}" dev --oneline | grep -q .; then
-            echo "Skipping commit $COMMIT: Already reverted."
-            git log --grep="Revert.*$COMMIT" dev --oneline || git log --grep="Revert.*${{ steps.normalize.outputs.normalized_branch }}" dev --oneline
+        REVERTED=""
+        IFS=$'\n'
+        for COMMIT in $(echo "${{ steps.find_squash_commits.outputs.squash_commits }}"); do
+          if git log --grep="Revert.*$COMMIT" dev --oneline | grep -q .; then
+            echo "Skipping $COMMIT: already reverted."
             continue
           fi
-          echo "Reverting squash commit $COMMIT"
-          set +e  # Disable exit-on-error to capture revert output
-          REVERT_OUTPUT=$(git revert --no-commit $COMMIT 2>&1)
-          REVERT_STATUS=$?
-          set -e  # Re-enable exit-on-error
-          if [ $REVERT_STATUS -ne 0 ]; then
-            echo "Error: Failed to revert commit $COMMIT: $REVERT_OUTPUT"
+          echo "Reverting $COMMIT ..."
+          set +e
+          git revert --no-commit $COMMIT
+          STATUS=$?
+          set -e
+          if [ $STATUS -ne 0 ]; then
+            echo "Conflict reverting $COMMIT, aborting."
             git revert --abort || true
             continue
           fi
-          if git status --porcelain | grep -q "^[ADRU]"; then
-            git commit -m "Revert squash commit $COMMIT from pull request of ${{ steps.normalize.outputs.normalized_branch }}"
-            REVERTED_COMMITS="$REVERTED_COMMITS $COMMIT"
-            ANY_CHANGES=true
+          if git diff --cached --quiet; then
+            echo "No changes from revert (probably already reverted)."
+            git reset
           else
-            echo "Warning: Revert of commit $COMMIT produced no changes (may already be reverted). Revert output: $REVERT_OUTPUT"
-            git revert --abort || true
+            git commit -m "Revert squash commit $COMMIT (from branch ${{ steps.normalize.outputs.normalized_branch }})"
+            ANY_CHANGES=true
+            REVERTED="$REVERTED $COMMIT"
           fi
         done
+
         if [ "$ANY_CHANGES" = "true" ]; then
           echo "has_changes=true" >> $GITHUB_OUTPUT
-          echo "reverted_commits=$REVERTED_COMMITS" >> $GITHUB_OUTPUT
+          echo "reverted_commits=$REVERTED" >> $GITHUB_OUTPUT
         else
-          echo "Error: No changes produced from reverting any squash commits (all may already be reverted)."
+          echo "No changes made."
           exit 1
         fi
 
-    - name: Push to dev
+    - name: Push changes
       if: steps.revert.outputs.has_changes == 'true'
       run: |
-        git remote set-url origin https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git
+        git pull origin dev --rebase
         git push origin dev
-        echo "Successfully pushed revert commits for: ${{ steps.revert.outputs.reverted_commits }}"
-
-    - name: Notify success
-      if: steps.revert.outputs.has_changes == 'true'
-      run: |
-        echo "Successfully reverted the following squash commits from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev:"
-        for COMMIT in ${{ steps.revert.outputs.reverted_commits }}; do
-          echo "- $COMMIT"
-        done
+        echo "Pushed reverts: ${{ steps.revert.outputs.reverted_commits }}"
