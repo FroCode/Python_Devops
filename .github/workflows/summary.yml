@@ -18,6 +18,13 @@ jobs:
         fetch-depth: 0  # Fetch all history for proper commit lookup
         token: ${{ secrets.PAT }}  # Use PAT for push permissions
 
+    - name: Validate dev branch
+      run: |
+        if ! git show-ref --quiet refs/heads/dev; then
+          echo "Error: 'dev' branch does not exist."
+          exit 1
+        fi
+
     - name: Normalize branch name
       id: normalize
       run: |
@@ -70,6 +77,7 @@ jobs:
         # Check if the merge commit was already reverted
         if git log --grep="Revert merge commit $MERGE_COMMIT" dev --oneline | grep -q .; then
           echo "Error: Merge commit $MERGE_COMMIT from branch '${{ steps.normalize.outputs.normalized_branch }}' has already been reverted."
+          git log --grep="Revert merge commit $MERGE_COMMIT" dev --oneline
           exit 1
         fi
         echo "Found merge commit: $MERGE_COMMIT"
@@ -91,53 +99,37 @@ jobs:
         REVERT_STATUS=$?
         set -e  # Re-enable exit-on-error
         if [ $REVERT_STATUS -ne 0 ]; then
-          if echo "$REVERT_OUTPUT" | grep -q "merge conflict"; then
-            echo "Merge conflict detected during revert"
-            echo "has_conflict=true" >> $GITHUB_OUTPUT
-            echo "revert_output=$REVERT_OUTPUT" >> $GITHUB_OUTPUT
-          else
-            echo "Error: Failed to revert commit ${{ steps.find_merge_commit.outputs.commit_to_revert }}: $REVERT_OUTPUT"
-            git revert --abort || true
-            exit 1
-          fi
-        else
+          echo "Error: Failed to revert commit ${{ steps.find_merge_commit.outputs.commit_to_revert }}: $REVERT_OUTPUT"
+          git revert --abort || true
+          exit 1
+        fi
+        if git status --porcelain | grep -q "^[ADRU]"; then
           git commit -m "Revert merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} from pull request of ${{ steps.normalize.outputs.normalized_branch }}"
-          echo "has_conflict=false" >> $GITHUB_OUTPUT
+          echo "has_changes=true" >> $GITHUB_OUTPUT
           echo "revert_output=" >> $GITHUB_OUTPUT
+        else
+          echo "Error: Revert produced no changes (commit may already be reverted or empty). Revert output: $REVERT_OUTPUT"
+          git revert --abort || true
+          exit 1
         fi
       continue-on-error: true
 
     - name: Handle revert result
       run: |
-        if [ "${{ steps.revert.outputs.has_conflict }}" = "true" ]; then
-          echo "Handling merge conflict"
-          REVERT_BRANCH="revert-${{ steps.normalize.outputs.normalized_branch }}-${{ github.run_id }}"
-          git checkout -b "$REVERT_BRANCH"
-          if git status --porcelain | grep -q "^[ADRU]"; then
-            git add .
-            git commit -m "Staged revert of ${{ steps.find_merge_commit.outputs.commit_to_revert }} with conflicts"
-            git remote set-url origin https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git
-            git push origin "$REVERT_BRANCH"
-            echo "Pushed to branch $REVERT_BRANCH for manual conflict resolution"
-            echo "Please resolve conflicts in branch $REVERT_BRANCH and create a PR to dev"
-            echo "Revert output: ${{ steps.revert.outputs.revert_output }}"
-            exit 1
-          else
-            echo "Error: Revert failed with conflicts, but no changes to commit. Revert output: ${{ steps.revert.outputs.revert_output }}"
-            git revert --abort || true
-            exit 1
-          fi
-        else
+        if [ "${{ steps.revert.outputs.has_changes }}" = "true" ]; then
           echo "No conflicts, creating PR to dev"
           git remote set-url origin https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git
           REVERT_BRANCH="revert-${{ steps.normalize.outputs.normalized_branch }}-${{ github.run_id }}"
           git checkout -b "$REVERT_BRANCH"
           git push origin "$REVERT_BRANCH"
           gh pr create --base dev --head "$REVERT_BRANCH" --title "Revert merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} from ${{ steps.normalize.outputs.normalized_branch }}" --body "Automated revert of merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} from pull request of ${{ steps.normalize.outputs.normalized_branch }}"
+        else
+          echo "Error: No changes to commit after revert attempt. See previous step for details."
+          exit 1
         fi
       env:
         GITHUB_TOKEN: ${{ secrets.PAT }}
 
     - name: Notify success
-      if: steps.revert.outputs.has_conflict != 'true'
+      if: steps.revert.outputs.has_changes == 'true'
       run: echo "Successfully created PR to revert merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
