@@ -67,6 +67,11 @@ jobs:
           echo "Error: No merge commit found for a pull request from branch '${{ steps.normalize.outputs.normalized_branch }}' in dev"
           exit 1
         fi
+        # Check if the merge commit was already reverted
+        if git log --grep="Revert merge commit $MERGE_COMMIT" dev --oneline | grep -q .; then
+          echo "Error: Merge commit $MERGE_COMMIT from branch '${{ steps.normalize.outputs.normalized_branch }}' has already been reverted."
+          exit 1
+        fi
         echo "Found merge commit: $MERGE_COMMIT"
         echo "commit_to_revert=$MERGE_COMMIT" >> $GITHUB_OUTPUT
         echo "Commit details:"
@@ -90,7 +95,6 @@ jobs:
             echo "Merge conflict detected during revert"
             echo "has_conflict=true" >> $GITHUB_OUTPUT
             echo "revert_output=$REVERT_OUTPUT" >> $GITHUB_OUTPUT
-            # Don't abort yet; let the conflict handling step deal with it
           else
             echo "Error: Failed to revert commit ${{ steps.find_merge_commit.outputs.commit_to_revert }}: $REVERT_OUTPUT"
             git revert --abort || true
@@ -99,13 +103,14 @@ jobs:
         else
           git commit -m "Revert merge commit ${{ steps.find_merge_commit.outputs.commit_to_revert }} from pull request of ${{ steps.normalize.outputs.normalized_branch }}"
           echo "has_conflict=false" >> $GITHUB_OUTPUT
+          echo "revert_output=" >> $GITHUB_OUTPUT
         fi
       continue-on-error: true
 
     - name: Handle revert result
       run: |
         if [ "${{ steps.revert.outputs.has_conflict }}" = "true" ]; then
-          echo "Creating branch for conflict resolution"
+          echo "Handling merge conflict"
           REVERT_BRANCH="revert-${{ steps.normalize.outputs.normalized_branch }}-${{ github.run_id }}"
           git checkout -b "$REVERT_BRANCH"
           if git status --porcelain | grep -q "^[ADRU]"; then
