@@ -42,19 +42,28 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
-      # Validate PR number and get PR branch name
-      - name: Get PR branch name
+      # Validate PR number and get PR details
+      - name: Get PR branch name and base branch
         id: pr_info
         run: |
           if ! [[ "${{ github.event.inputs.pr_number }}" =~ ^[0-9]+$ ]]; then
             echo "❌ Invalid PR number: ${{ github.event.inputs.pr_number }}"
             exit 1
           fi
-          BRANCH_NAME=$(gh pr view ${{ github.event.inputs.pr_number }} --json headRefName -q ".headRefName" || {
+          PR_INFO=$(gh pr view ${{ github.event.inputs.pr_number }} --json headRefName,baseRefName -q "{ \"branch_name\": .headRefName, \"base_branch\": .baseRefName }" || {
             echo "❌ Failed to fetch PR #${{ github.event.inputs.pr_number }}. Ensure PR exists and PAT has correct permissions."
             exit 1
           })
+          BRANCH_NAME=$(echo "$PR_INFO" | jq -r .branch_name)
+          BASE_BRANCH=$(echo "$PR_INFO" | jq -r .base_branch)
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+          echo "base_branch=$BASE_BRANCH" >> $GITHUB_ENV
+          echo "PR head branch: $BRANCH_NAME"
+          echo "PR base branch: $BASE_BRANCH"
+          if [ "$BASE_BRANCH" != "dev" ]; then
+            echo "❌ PR #${{ github.event.inputs.pr_number }} base branch is '$BASE_BRANCH', expected 'dev'"
+            exit 1
+          fi
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
@@ -143,7 +152,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Perform squash merge into dev using gh pr merge with retries
+      # Perform squash merge into dev using gh pr merge
       - name: Squash merge PR into dev
         id: merge
         if: steps.check_mergeability.outputs.mergeable == 'true'
@@ -151,7 +160,7 @@ jobs:
           echo "Attempting to squash merge PR #${{ github.event.inputs.pr_number }} into dev..."
           set +e
           for attempt in {1..3}; do
-            gh pr merge ${{ github.event.inputs.pr_number }} --squash --target-branch dev --body "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }}"
+            gh pr merge ${{ github.event.inputs.pr_number }} --squash --body "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }}"
             STATUS=$?
             if [ $STATUS -eq 0 ]; then
               echo "✅ Merge succeeded on attempt $attempt"
@@ -159,7 +168,7 @@ jobs:
               break
             fi
             echo "⚠️ Merge failed on attempt $attempt, retrying in 10s..."
-            ERROR_MSG=$(gh pr merge ${{ github.event.inputs.pr_number }} --squash --target-branch dev --body "Test merge" 2>&1 || true)
+            ERROR_MSG=$(gh pr merge ${{ github.event.inputs.pr_number }} --squash --body "Test merge" 2>&1 || true)
             echo "Error message: $ERROR_MSG"
             sleep 10
           done
