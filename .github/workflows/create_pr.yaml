@@ -1,0 +1,22 @@
+name: create-pr-merge-to-dev
+
+on:
+    workflow_dispatch:
+        inputs:
+            Title:
+                description: 'Title of the pull request'
+                required: true
+            Description:
+                description: 'Description of the pull request'
+                required: false
+            Reviewer:
+                description: 'GitHub username of the reviewer'
+                required: false
+
+jobs:
+    create_pr:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v3
+            # Add steps here to create PR as needed
