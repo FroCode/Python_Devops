@@ -144,11 +144,10 @@ jobs:
           echo "Please resolve the conflict manually via a PR."
           exit 1
 
-      # Comment on PR after successful merge
-      - name: Comment on PR
+      # Close the PR after successful merge
+      - name: Close PR
         if: steps.merge.outputs.conflict == 'false'
         run: |
-          gh pr comment ${{ github.event.inputs.pr_number }} \
-            --body "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }}"
+          gh pr close ${{ github.event.inputs.pr_number }} --comment "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }}"
         env:
           GH_TOKEN: ${{ secrets.PAT }}
