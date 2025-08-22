@@ -1,0 +1,130 @@
+name: squash-merge-into-dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull Request Number (e.g. 123)"
+        required: true
+
+jobs:
+  squash-merge:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT }}
+
+      # Configure Git
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+      # Get PR branch name
+      - name: Get PR branch name
+        id: pr_info
+        run: |
+          BRANCH_NAME=$(gh pr view ${{ github.event.inputs.pr_number }} --json headRefName -q ".headRefName")
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+
+      # Check if commit message already exists in dev
+      - name: Check if commit exists
+        id: check_commit
+        run: |
+          git fetch origin dev
+          git checkout dev
+          COMMIT_MSG="from ${{ env.branch_name }}"
+          if git log --pretty=format:"%s" origin/dev | grep -q "^$COMMIT_MSG$"; then
+            echo "duplicate=true" >> $GITHUB_OUTPUT
+          else
+            echo "duplicate=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Prepare branch name for inputs
+      - name: Prepare branch name
+        id: prepare_branch
+        run: |
+          echo "branch_name=${{ env.branch_name }}" >> $GITHUB_OUTPUT
+
+      # Trigger revert workflow if duplicate commit exists
+      - name: Trigger revert workflow
+        if: steps.check_commit.outputs.duplicate == 'true'
+        uses: peter-evans/workflow-dispatch@v2
+        with:
+          token: ${{ secrets.PAT }}
+          repository: ${{ github.repository }}
+          workflow: manual-revert-workflow.yml
+          ref: dev
+          inputs:
+            branch_name: ${{ steps.prepare_branch.outputs.branch_name }}
+
+      # Wait for revert workflow completion (polling)
+      - name: Wait for revert workflow to finish
+        if: steps.check_commit.outputs.duplicate == 'true'
+        run: |
+          echo "⏳ Waiting for revert workflow to complete..."
+          ATTEMPTS=0
+          MAX_ATTEMPTS=30
+          while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+            STATUS=$(gh run list --workflow manual-revert-workflow.yml --json status -q '.[0].status')
+            echo "Revert workflow status: $STATUS"
+            if [ "$STATUS" == "completed" ]; then
+              echo "✅ Revert workflow completed"
+              break
+            fi
+            echo "Still running... waiting 10s"
+            ATTEMPTS=$((ATTEMPTS+1))
+            sleep 10
+          done
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+
+      # Perform squash merge into dev
+      - name: Squash merge PR into dev
+        id: merge
+        run: |
+          git fetch origin
+          git checkout dev
+          git pull origin dev
+
+          # Fetch PR branch
+          git fetch origin ${{ env.branch_name }}
+
+          set +e
+          git merge origin/${{ env.branch_name }} --squash
+          STATUS=$?
+          set -e
+
+          if [ $STATUS -ne 0 ]; then
+            echo "Merge conflict detected!"
+            echo "conflict=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          git commit -m "from ${{ env.branch_name }}"
+          git push origin dev
+          echo "conflict=false" >> $GITHUB_OUTPUT
+
+      # Fail workflow if merge conflict detected
+      - name: Fail on conflict
+        if: steps.merge.outputs.conflict == 'true'
+        run: |
+          echo "❌ Merge conflict detected when merging ${{ env.branch_name }} into dev."
+          echo "Please resolve the conflict manually via a PR."
+          exit 1
+
+      # Comment on PR after successful merge
+      - name: Comment on PR
+        if: steps.merge.outputs.conflict == 'false'
+        run: |
+          gh pr comment ${{ github.event.inputs.pr_number }} \
+            --body "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }}"
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
