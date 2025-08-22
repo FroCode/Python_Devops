@@ -12,6 +12,7 @@ permissions:
   contents: write
   pull-requests: write
   actions: write
+  checks: read
 
 jobs:
   squash-merge:
@@ -77,6 +78,8 @@ jobs:
             echo "ℹ️ No duplicate commit or revert found in last commit"
             echo "duplicate=false" >> $GITHUB_OUTPUT
           fi
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
 
       # Trigger revert workflow if duplicate commit exists
       - name: Trigger revert workflow
@@ -116,29 +119,63 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Perform squash merge into dev using gh pr merge
-      - name: Squash merge PR into dev
-        id: merge
+      # Check PR mergeability and status checks
+      - name: Check PR mergeability and status checks
+        id: check_mergeability
         run: |
-          set +e
-          gh pr merge ${{ github.event.inputs.pr_number }} --squash --target-branch dev --body "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }}"
-          STATUS=$?
-          set -e
-
-          if [ $STATUS -ne 0 ]; then
-            echo "Merge conflict detected or merge failed!"
-            echo "conflict=true" >> $GITHUB_OUTPUT
+          echo "Checking PR #${{ github.event.inputs.pr_number }} mergeability..."
+          MERGEABLE_STATE=$(gh pr view ${{ github.event.inputs.pr_number }} --json mergeable -q ".mergeable")
+          echo "PR mergeable state: $MERGEABLE_STATE"
+          if [ "$MERGEABLE_STATE" != "MERGEABLE" ]; then
+            echo "❌ PR #${{ github.event.inputs.pr_number }} is not mergeable (state: $MERGEABLE_STATE)."
+            echo "mergeable=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          echo "conflict=false" >> $GITHUB_OUTPUT
+          echo "Checking required status checks..."
+          STATUS_CHECKS=$(gh pr view ${{ github.event.inputs.pr_number }} --json statusCheckRollup -q ".statusCheckRollup[] | select(.status == \"FAILURE\" or .status == \"PENDING\") | .name" || echo "")
+          if [ -n "$STATUS_CHECKS" ]; then
+            echo "❌ Required status checks are failing or pending: $STATUS_CHECKS"
+            echo "mergeable=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "✅ PR is mergeable and status checks are passing"
+          echo "mergeable=true" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Fail workflow if merge conflict detected
-      - name: Fail on conflict
+      # Perform squash merge into dev using gh pr merge with retries
+      - name: Squash merge PR into dev
+        id: merge
+        if: steps.check_mergeability.outputs.mergeable == 'true'
+        run: |
+          echo "Attempting to squash merge PR #${{ github.event.inputs.pr_number }} into dev..."
+          set +e
+          for attempt in {1..3}; do
+            gh pr merge ${{ github.event.inputs.pr_number }} --squash --target-branch dev --body "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }}"
+            STATUS=$?
+            if [ $STATUS -eq 0 ]; then
+              echo "✅ Merge succeeded on attempt $attempt"
+              echo "conflict=false" >> $GITHUB_OUTPUT
+              break
+            fi
+            echo "⚠️ Merge failed on attempt $attempt, retrying in 10s..."
+            ERROR_MSG=$(gh pr merge ${{ github.event.inputs.pr_number }} --squash --target-branch dev --body "Test merge" 2>&1 || true)
+            echo "Error message: $ERROR_MSG"
+            sleep 10
+          done
+          set -e
+          if [ $STATUS -ne 0 ]; then
+            echo "❌ Merge failed after 3 attempts!"
+            echo "conflict=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+
+      # Fail workflow if merge conflict or other issue detected
+      - name: Fail on conflict or merge failure
         if: steps.merge.outputs.conflict == 'true'
         run: |
-          echo "❌ Merge conflict detected when merging ${{ env.branch_name }} into dev."
-          echo "Please resolve the conflict manually via a PR."
+          echo "❌ Merge conflict or failure detected when merging ${{ env.branch_name }} into dev."
+          echo "Please resolve the conflict manually via a PR or check the workflow logs for details."
           exit 1
