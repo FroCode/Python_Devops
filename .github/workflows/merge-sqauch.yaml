@@ -108,30 +108,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Perform squash merge into dev
+      # Perform squash merge into dev using gh pr merge
       - name: Squash merge PR into dev
         id: merge
         run: |
-          git fetch origin
-          git checkout dev
-          git pull origin dev
-
-          # Fetch PR branch
-          git fetch origin ${{ env.branch_name }}
-
           set +e
-          git merge origin/${{ env.branch_name }} --squash
+          gh pr merge ${{ github.event.inputs.pr_number }} --squash --target-branch dev --body "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }}"
           STATUS=$?
           set -e
 
           if [ $STATUS -ne 0 ]; then
-            echo "Merge conflict detected!"
+            echo "Merge conflict detected or merge failed!"
             echo "conflict=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          git commit -m "from ${{ env.branch_name }}"
-          git push origin dev
           echo "conflict=false" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.PAT }}
@@ -143,11 +134,3 @@ jobs:
           echo "❌ Merge conflict detected when merging ${{ env.branch_name }} into dev."
           echo "Please resolve the conflict manually via a PR."
           exit 1
-
-      # Close the PR after successful merge
-      - name: Close PR
-        if: steps.merge.outputs.conflict == 'false'
-        run: |
-          gh pr close ${{ github.event.inputs.pr_number }} --comment "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }}"
-        env:
-          GH_TOKEN: ${{ secrets.PAT }}
