@@ -57,16 +57,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Check if commit message already exists in dev
+      # Check if last commit on dev is from the target branch or a revert
       - name: Check if commit exists
         id: check_commit
         run: |
           git fetch origin dev
           git checkout dev
+          LAST_COMMIT_MSG=$(git log -1 --pretty=%s origin/dev)
           COMMIT_MSG="from ${{ env.branch_name }}"
-          if git log --pretty=format:"%s" origin/dev | grep -q "^$COMMIT_MSG$"; then
+          REVERT_MSG="Revert 'from ${{ env.branch_name }}'"
+          echo "Last commit message: $LAST_COMMIT_MSG"
+          if [ "$LAST_COMMIT_MSG" = "$COMMIT_MSG" ]; then
+            echo "✅ Last commit is from ${{ env.branch_name }}, triggering revert workflow"
             echo "duplicate=true" >> $GITHUB_OUTPUT
+          elif [ "$LAST_COMMIT_MSG" = "$REVERT_MSG" ]; then
+            echo "ℹ️ Last commit is a revert of ${{ env.branch_name }}, skipping revert workflow"
+            echo "duplicate=false" >> $GITHUB_OUTPUT
           else
+            echo "ℹ️ No duplicate commit or revert found in last commit"
             echo "duplicate=false" >> $GITHUB_OUTPUT
           fi
 
