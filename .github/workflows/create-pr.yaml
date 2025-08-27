@@ -3,15 +3,14 @@ name: Comprehensive PR Automation
 on:
   push:
     branches:
-      - "feature/**" # ✅ Correct glob to match nested branches
+      - "feature/**" # ✅ Ensures all feature branches trigger
   pull_request:
-    types: [opened, ready_for_review]
+    types: [opened, ready_for_review, reopened]
 
 jobs:
   create-pr:
     runs-on: ubuntu-latest
-    # ✅ Run only on pushes to feature/*
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/heads/feature/')
     steps:
       - uses: actions/checkout@v4
 
@@ -21,7 +20,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           title: "Automated PR for ${{ github.ref_name }}"
           body: "Auto-generated PR for changes in ${{ github.ref_name }}."
-          branch: ${{ github.ref_name }}-auto
+          branch: "${{ github.ref_name }}-auto"
           labels: auto-generated
           draft: false
 
