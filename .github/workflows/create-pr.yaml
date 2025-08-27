@@ -28,19 +28,6 @@ jobs:
     steps:
       - uses: hkusu/review-assign-action@v1
         with:
-          repo-token: ${{ secrets.PAT_TOKEN }} # Use PAT for team assignments
-          reviewers: "team-lead,senior-dev"
+          reviewers: "FroCode"
           max-num-of-reviewers: 2
           ready-comment: "Ready for review! Assigned reviewers: <reviewers>"
-          skip-keywords: "wip,draft"
-
-  notify-slack:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: Notify Slack
-        uses: slackapi/slack-github-action@v1.27.0
-        with:
-          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
-          channel-id: "code-reviews"
-          text: "New PR opened: ${{ github.event.pull_request.html_url }}. Reviewers: <reviewers>"
