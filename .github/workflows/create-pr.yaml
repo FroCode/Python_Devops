@@ -1,17 +1,20 @@
 name: Comprehensive PR Automation
+
 on:
   push:
     branches:
-      - feature/*
+      - "feature/**" # ✅ Correct glob to match nested branches
   pull_request:
     types: [opened, ready_for_review]
 
 jobs:
   create-pr:
     runs-on: ubuntu-latest
+    # ✅ Run only on pushes to feature/*
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
+
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
         with:
@@ -24,6 +27,7 @@ jobs:
 
   assign-reviewers:
     runs-on: ubuntu-latest
+    # ✅ Run only when PR is opened or marked ready
     if: github.event_name == 'pull_request'
     steps:
       - uses: hkusu/review-assign-action@v1
