@@ -18,7 +18,7 @@ jobs:
   create-pr:
     name: Create Pull Request
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')  # Ensure push to feature/*
+    if: github.event_name == 'push'
     steps:
       - name: Debug Trigger Information
         run: |
