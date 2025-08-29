@@ -1,0 +1,28 @@
+name: Trigger PR Automation
+
+on:
+  push:
+    branches:
+      - 'feature/*' # Any feature branch push triggers this workflow
+
+jobs:
+  trigger-main-workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Main Workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            const branch = context.ref.replace('refs/heads/', '');
+            console.log(`Triggering main automation workflow for branch: ${branch}`);
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "centralized-pr-automation.yml",  // <-- Main workflow filename
+              ref: "main",
+              inputs: {
+                branch_name: branch
+              }
+            });
