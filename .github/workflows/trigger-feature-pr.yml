@@ -25,4 +25,4 @@ jobs:
               inputs: {
                 branch_name: branch
               }
-            });
+            });         
