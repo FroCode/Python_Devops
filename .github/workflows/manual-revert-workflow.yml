@@ -1,5 +1,4 @@
 name: manual-revert-workflow
-
 on:
   workflow_dispatch:
     inputs:
@@ -10,7 +9,6 @@ on:
 jobs:
   revert-squash-commit:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,17 +32,16 @@ jobs:
           git checkout dev
           git pull origin dev
 
-      - name: Find latest squash merge commit for this branch
+      - name: Find latest squash merge commit
         id: find_commit
         run: |
           PATTERN="${{ steps.normalize.outputs.normalized_branch }}"
           COMMIT=$(git log dev --grep="from .*$PATTERN" --pretty=%H -n 1)
           if [ -z "$COMMIT" ]; then
-            echo "No squash merge commit found in dev for '$PATTERN'"
+            echo "Error: No squash merge commit found in dev for '$PATTERN'"
             exit 1
           fi
           echo "commit_sha=$COMMIT" >> $GITHUB_OUTPUT
-          echo "Found commit: $COMMIT"
 
       - name: Configure Git
         run: |
@@ -60,33 +57,53 @@ jobs:
           FEATURE="${{ steps.normalize.outputs.normalized_branch }}"
           SHORT_HASH=$(echo "$COMMIT" | cut -c1-7)
           TIMESTAMP=$(date +%s)
+          BRANCH="revert-conflict/$FEATURE/$SHORT_HASH-$TIMESTAMP"
 
           echo "Attempting to revert $COMMIT from $FEATURE..."
 
           set +e
-          git revert "$COMMIT"
+          git revert "$COMMIT" --no-edit
           STATUS=$?
           set -e
 
           if [ $STATUS -ne 0 ]; then
             echo "Conflict detected for $COMMIT"
+            echo "Staging conflicted files..."
+            git status
+            git add .
+            git commit -m "Conflicted revert of $COMMIT from $FEATURE"
 
-            BRANCH="revert-conflict/$FEATURE/$SHORT_HASH-$TIMESTAMP"
-
-            # Do not abort; keep conflict state
-            git checkout -b "$BRANCH"
+            echo "Pushing conflicted branch $BRANCH..."
             git push origin "$BRANCH"
 
+            echo "Creating PR for manual conflict resolution..."
             gh pr create \
               --base dev \
               --head "$BRANCH" \
-              --title "Conflict while reverting $COMMIT from $FEATURE" \
-              --body "Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'. Please resolve manually."
+              --title "Resolve conflicts: Revert $COMMIT from $FEATURE" \
+              --body "Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'. 
+
+              **Steps to resolve:**
+              1. Open the 'Files changed' tab in this PR to view conflicts.
+              2. Edit files to resolve conflict markers (<<<<<<<, =======, >>>>>>>).
+              3. Commit changes directly in GitHub or locally.
+              4. Merge the PR once conflicts are resolved.
+
+              **Conflicted files:**
+              \`\`\`
+              $(git diff --name-only --diff-filter=U)
+              \`\`\`
+
+              **Commit details:**
+              - Commit SHA: $COMMIT
+              - Feature branch: $FEATURE"
 
             echo "conflict=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
+          echo "Revert successful, committing changes..."
+          git commit -m "Revert squash merge $COMMIT from $FEATURE"
           echo "conflict=false" >> $GITHUB_OUTPUT
 
       - name: Push revert to dev
