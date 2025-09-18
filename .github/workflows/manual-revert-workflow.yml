@@ -122,9 +122,9 @@ jobs:
               done
             fi
 
-            # Continue the revert, allowing empty commit if no changes
-            if ! git revert --continue --allow-empty; then
-              echo "Error: Failed to continue revert after staging conflicts"
+            # Commit with allow-empty to ensure revert is recorded
+            if ! git commit --allow-empty -m "Conflicted revert of $COMMIT from $FEATURE (resolution: $RESOLUTION)"; then
+              echo "Error: Failed to commit conflict resolution"
               git status
               exit 1
             fi
@@ -142,9 +142,10 @@ jobs:
 
               **Steps to resolve:**
               1. Open the 'Files changed' tab in this PR to view conflicts.
-              2. Edit files to resolve conflict markers (<<<<<<<, =======, >>>>>>>) or confirm deletion.
-              3. Commit changes directly in GitHub or locally.
-              4. Merge the PR once conflicts are resolved.
+              2. Review the applied resolution (strategy: $RESOLUTION) for files like $CONFLICTED_FILES.
+              3. Edit files to keep the HEAD version, delete them, or resolve conflict markers (<<<<<<<, =======, >>>>>>>).
+              4. Commit changes directly in GitHub or locally.
+              5. Merge the PR once the resolution is confirmed.
 
               **Conflicted files:**
               \`\`\`
@@ -159,8 +160,8 @@ jobs:
               PR_BODY="Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
 
               **Steps to resolve:**
-              1. Review the staged resolution (e.g., $RESOLUTION applied for files) in the 'Files changed' tab.
-              2. If the resolution is incorrect, edit files or remove them as needed.
+              1. Review the staged resolution (strategy: $RESOLUTION) in the 'Files changed' tab.
+              2. If the resolution is incorrect (e.g., keeping or deleting $CONFLICTED_FILES), edit or remove files as needed.
               3. Commit changes directly in GitHub or locally.
               4. Merge the PR once the resolution is confirmed.
 
