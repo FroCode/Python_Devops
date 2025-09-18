@@ -5,6 +5,10 @@ on:
       branch_name:
         description: "Feature branch whose last squash merge into dev should be reverted (e.g., feature/30)"
         required: true
+      conflict_resolution:
+        description: "Resolution strategy for modify/delete conflicts: 'keep' (keep HEAD version) or 'delete' (accept deletion from revert)"
+        required: false
+        default: "keep"
 
 jobs:
   revert-squash-commit:
@@ -70,8 +74,9 @@ jobs:
           SHORT_HASH=$(echo "$COMMIT" | cut -c1-7)
           TIMESTAMP=$(date +%s)
           BRANCH="revert-conflict/$FEATURE/$SHORT_HASH-$TIMESTAMP"
+          RESOLUTION="${{ github.event.inputs.conflict_resolution }}"
 
-          echo "Attempting to revert $COMMIT from $FEATURE..."
+          echo "Attempting to revert $COMMIT from $FEATURE with resolution strategy: $RESOLUTION..."
 
           set +e
           git revert "$COMMIT" --no-edit
@@ -86,29 +91,39 @@ jobs:
             CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || echo "")
             if [ -n "$CONFLICTED_FILES" ]; then
               for FILE in $CONFLICTED_FILES; do
-                if [ -f "$FILE" ]; then
-                  echo "Staging modified file: $FILE"
-                  git add "$FILE"
-                else
+                if [ "$RESOLUTION" = "delete" ]; then
                   echo "Staging deleted file: $FILE"
                   git rm "$FILE"
+                else
+                  if [ -f "$FILE" ]; then
+                    echo "Staging modified file: $FILE"
+                    git add "$FILE"
+                  else
+                    echo "Staging deleted file: $FILE"
+                    git rm "$FILE"
+                  fi
                 fi
               done
             else
               echo "No conflicted files found, checking unmerged paths..."
               git status --porcelain | grep '^U' | awk '{print $2}' | while read -r FILE; do
-                if [ -f "$FILE" ]; then
-                  echo "Staging unmerged file: $FILE"
-                  git add "$FILE"
-                else
+                if [ "$RESOLUTION" = "delete" ]; then
                   echo "Staging deleted unmerged file: $FILE"
                   git rm "$FILE"
+                else
+                  if [ -f "$FILE" ]; then
+                    echo "Staging unmerged file: $FILE"
+                    git add "$FILE"
+                  else
+                    echo "Staging deleted unmerged file: $FILE"
+                    git rm "$FILE"
+                  fi
                 fi
               done
             fi
 
-            # Continue the revert after staging conflicts
-            if ! git revert --continue; then
+            # Continue the revert, allowing empty commit if no changes
+            if ! git revert --continue --allow-empty; then
               echo "Error: Failed to continue revert after staging conflicts"
               git status
               exit 1
@@ -136,19 +151,21 @@ jobs:
               $CONFLICTED_FILES
               \`\`\`
 
-              **Commit details:**
+              **Resolution applied:**
+              - Strategy: $RESOLUTION
               - Commit SHA: $COMMIT
               - Feature branch: $FEATURE"
             else
               PR_BODY="Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
 
               **Steps to resolve:**
-              1. Review the staged resolution (e.g., kept or deleted files) in the 'Files changed' tab.
+              1. Review the staged resolution (e.g., $RESOLUTION applied for files) in the 'Files changed' tab.
               2. If the resolution is incorrect, edit files or remove them as needed.
               3. Commit changes directly in GitHub or locally.
               4. Merge the PR once the resolution is confirmed.
 
-              **Commit details:**
+              **Resolution applied:**
+              - Strategy: $RESOLUTION
               - Commit SHA: $COMMIT
               - Feature branch: $FEATURE"
             fi
