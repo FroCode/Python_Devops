@@ -1,4 +1,4 @@
-name: Create Tag and Release
+name: Release Pipeline
 
 on:
   workflow_dispatch:
@@ -11,22 +11,23 @@ on:
           - patch
           - release
       version:
-        description: "Version (required if mode=release, ignored for patch)"
+        description: "Version (required if mode=release)"
         required: false
         default: ""
 
 jobs:
-  tag_and_release:
+  release:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.PAT }}
+          fetch-depth: 0
 
-      - name: Fetch tags
-        run: git fetch --tags
+      - name: Fetch all branches and tags
+        run: git fetch --all --tags
 
       - name: Determine version
         id: version
@@ -45,7 +46,7 @@ jobs:
               exit 1
             fi
           fi
-          
+
           # Check if tag exists
           if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
             echo "❌ Tag v$NEW_VERSION already exists!"
@@ -53,20 +54,64 @@ jobs:
           fi
 
           echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
-          echo "✅ New version will be v$NEW_VERSION"
+          echo "✅ Version to create: v$NEW_VERSION"
+
+      - name: Create release branch from dev
+        id: create_branch
+        run: |
+          RELEASE_BRANCH="release/v${{ env.new_version }}"
+          git checkout dev
+          git pull origin dev
+          git checkout -b $RELEASE_BRANCH
+          git push origin $RELEASE_BRANCH
+          echo "release_branch=$RELEASE_BRANCH" >> $GITHUB_ENV
+          echo "✅ Created release branch: $RELEASE_BRANCH"
+
+      - name: Merge release branch into test environment
+        run: |
+          TEST_BRANCH="test-env"
+          git checkout $TEST_BRANCH
+          git pull origin $TEST_BRANCH
+          git merge --no-ff ${{ env.release_branch }} -m "Merge ${{ env.release_branch }} into $TEST_BRANCH for testing"
+          git push origin $TEST_BRANCH
+          echo "✅ Merged release branch into $TEST_BRANCH for testing"
+
+      - name: Wait for manual testing
+        run: |
+          echo "⚠️ Pause here for manual testing in test environment before merging to main."
+          echo "You can continue by triggering the next workflow/job manually."
+
+  finalize_release:
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.proceed == 'true' || true }} # manual proceed can be added if needed
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT }}
+          fetch-depth: 0
+
+      - name: Merge release branch into main
+        run: |
+          git checkout main
+          git pull origin main
+          git merge --no-ff ${{ github.event.inputs.release_branch }} -m "Merge release ${{ github.event.inputs.release_branch }} into main"
+          git push origin main
+          echo "✅ Merged release branch into main"
 
       - name: Create tag
         run: |
           git tag "v${{ env.new_version }}"
           git push origin "v${{ env.new_version }}"
+          echo "✅ Created tag v${{ env.new_version }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.new_version }}
           name: Release v${{ env.new_version }}
-          body: |
-            🚀 Release v${{ env.new_version }}
-            Created automatically via GitHub Actions.
+          body: "🚀 Release v${{ env.new_version }} from main"
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
