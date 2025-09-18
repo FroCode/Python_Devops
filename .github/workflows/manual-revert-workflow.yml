@@ -10,6 +10,7 @@ on:
 jobs:
   revert-squash-commit:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -60,12 +61,14 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
+      - name: Authenticate GitHub CLI
+        run: |
+          gh auth login --with-token <<< "${{ secrets.PAT }}"
+
       - name: Revert latest squash merge commit
         id: revert
-        env:
-          GH_TOKEN: ${{ secrets.PAT }}
         run: |
-          set -x
+          set -e
           COMMIT="${{ steps.find_commit.outputs.commit_sha }}"
           FEATURE="${{ steps.normalize.outputs.normalized_branch }}"
           SHORT_HASH=$(echo "$COMMIT" | cut -c1-7)
@@ -74,38 +77,37 @@ jobs:
 
           echo "Attempting to revert $COMMIT from $FEATURE..."
 
+          # Attempt revert without committing
           set +e
-          git revert "$COMMIT" --no-edit
+          git revert --no-commit "$COMMIT"
           STATUS=$?
           set -e
 
           if [ $STATUS -ne 0 ]; then
             echo "Conflict detected for $COMMIT"
             echo "Creating branch for manual conflict resolution..."
-
-            # Create a new branch for the conflicted state
+            
+            # Create a branch from current dev
             git checkout -b "$BRANCH"
 
-            # Stage conflicted files with conflict markers so commit can succeed
+            # Stage all files (conflicted files will keep conflict markers)
             git add -A
             git commit -m "Conflicted revert of $COMMIT from $FEATURE (manual resolution required)"
 
             echo "Pushing conflicted branch $BRANCH..."
-            if ! git push origin "$BRANCH"; then
-              echo "Error: Failed to push branch $BRANCH"
-              exit 1
-            fi
+            git push origin "$BRANCH"
 
-            echo "Creating PR for manual conflict resolution..."
+            # Prepare PR body safely
             CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || echo "Unknown")
-            PR_BODY="Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
+                        PR_BODY=$(cat <<EOF
+            Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
 
             **Steps to resolve:**
             1. Open the 'Files changed' tab in this PR to view conflicts.
             2. Resolve any conflict markers (\`\`\`<<<<<<<\`\`\`, \`\`\`=======\`\`\`, \`\`\`>>>>>>>\`\`\`) directly in GitHub or locally.
             3. Decide whether to:
-               - Keep the modified version from HEAD (stage with \`git add <file>\`).
-               - Accept the deletion from the revert (stage with \`git rm <file>\`).
+              - Keep the modified version from HEAD (stage with \`git add <file>\`).
+              - Accept the deletion from the revert (stage with \`git rm <file>\`).
             4. Once resolved, commit the changes and push them.
             5. Merge the PR once conflicts are resolved.
 
@@ -116,22 +118,24 @@ jobs:
 
             **Commit details:**
             - Commit SHA: $COMMIT
-            - Feature branch: $FEATURE"
+            - Feature branch: $FEATURE
+            EOF
+            )
 
-            if ! gh pr create \
+            echo "$PR_BODY" > pr_body.txt
+
+            echo "Creating PR for manual conflict resolution..."
+            gh pr create \
               --base dev \
               --head "$BRANCH" \
               --title "Resolve conflicts: Revert $COMMIT from $FEATURE" \
-              --body "$PR_BODY"; then
-              echo "Error: Failed to create PR"
-              exit 1
-            fi
+              --body-file pr_body.txt
 
             echo "conflict=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "Revert successful, committing changes..."
+          # If revert succeeds, commit and mark no conflict
           git commit -m "Revert squash merge $COMMIT from $FEATURE"
           echo "conflict=false" >> $GITHUB_OUTPUT
 
@@ -139,7 +143,4 @@ jobs:
         if: steps.revert.outputs.conflict == 'false'
         run: |
           git pull origin dev --rebase
-          if ! git push origin dev; then
-            echo "Error: Failed to push revert to dev"
-            exit 1
-          fi
+          git push origin dev
