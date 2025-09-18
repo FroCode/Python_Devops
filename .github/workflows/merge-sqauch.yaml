@@ -1,5 +1,3 @@
-name: squash-merge-into-dev
-
 on:
   workflow_dispatch:
     inputs:
@@ -168,7 +166,7 @@ jobs:
           echo "Attempting to squash merge PR #${{ github.event.inputs.pr_number }} into dev..."
           set +e
           for attempt in {1..3}; do
-            gh pr merge ${{ github.event.inputs.pr_number }} --squash --body "✅ Successfully squash merged into dev with commit: from ${{ env.branch_name }} --subject 'from ${{ env.branch_name }}'"
+            gh pr merge ${{ github.event.inputs.pr_number }} --squash --body "✅ Successfully squash merged into dev from ${{ env.branch_name }}" --subject "from ${{ env.branch_name }}"
             STATUS=$?
             if [ $STATUS -eq 0 ]; then
               echo "✅ Merge succeeded on attempt $attempt"
@@ -176,7 +174,7 @@ jobs:
               break
             fi
             echo "⚠️ Merge failed on attempt $attempt, retrying in 10s..."
-            ERROR_MSG=$(gh pr merge ${{ github.event.inputs.pr_number }} --squash --body "Test merge" 2>&1 || true)
+            ERROR_MSG=$(gh pr merge ${{ github.event.inputs.pr_number }} --squash --body "Test merge" --subject "from ${{ env.branch_name }}" 2>&1 || true)
             echo "Error message: $ERROR_MSG"
             sleep 10
           done
