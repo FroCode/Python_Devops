@@ -69,4 +69,4 @@ jobs:
             🚀 Release v${{ env.new_version }}
             Created automatically via GitHub Actions.
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}
