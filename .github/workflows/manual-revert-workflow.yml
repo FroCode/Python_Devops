@@ -5,10 +5,6 @@ on:
       branch_name:
         description: "Feature branch whose last squash merge into dev should be reverted (e.g., feature/30)"
         required: true
-      conflict_resolution:
-        description: "Resolution strategy for modify/delete conflicts: 'keep' (keep HEAD version) or 'delete' (accept deletion from revert)"
-        required: false
-        default: "keep"
 
 jobs:
   revert-squash-commit:
@@ -74,9 +70,8 @@ jobs:
           SHORT_HASH=$(echo "$COMMIT" | cut -c1-7)
           TIMESTAMP=$(date +%s)
           BRANCH="revert-conflict/$FEATURE/$SHORT_HASH-$TIMESTAMP"
-          RESOLUTION="${{ github.event.inputs.conflict_resolution }}"
 
-          echo "Attempting to revert $COMMIT from $FEATURE with resolution strategy: $RESOLUTION..."
+          echo "Attempting to revert $COMMIT from $FEATURE..."
 
           set +e
           git revert "$COMMIT" --no-edit
@@ -85,49 +80,13 @@ jobs:
 
           if [ $STATUS -ne 0 ]; then
             echo "Conflict detected for $COMMIT"
-            echo "Staging conflicted files..."
+            echo "Creating branch for manual conflict resolution..."
 
-            # Handle modify/delete and other conflicts
-            CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || echo "")
-            if [ -n "$CONFLICTED_FILES" ]; then
-              for FILE in $CONFLICTED_FILES; do
-                if [ "$RESOLUTION" = "delete" ]; then
-                  echo "Staging deleted file: $FILE"
-                  git rm "$FILE"
-                else
-                  if [ -f "$FILE" ]; then
-                    echo "Staging modified file: $FILE"
-                    git add "$FILE"
-                  else
-                    echo "Staging deleted file: $FILE"
-                    git rm "$FILE"
-                  fi
-                fi
-              done
-            else
-              echo "No conflicted files found, checking unmerged paths..."
-              git status --porcelain | grep '^U' | awk '{print $2}' | while read -r FILE; do
-                if [ "$RESOLUTION" = "delete" ]; then
-                  echo "Staging deleted unmerged file: $FILE"
-                  git rm "$FILE"
-                else
-                  if [ -f "$FILE" ]; then
-                    echo "Staging unmerged file: $FILE"
-                    git add "$FILE"
-                  else
-                    echo "Staging deleted unmerged file: $FILE"
-                    git rm "$FILE"
-                  fi
-                fi
-              done
-            fi
+            # Create a new branch for the conflicted state
+            git checkout -b "$BRANCH"
 
-            # Commit with allow-empty to ensure revert is recorded
-            if ! git commit --allow-empty -m "Conflicted revert of $COMMIT from $FEATURE (resolution: $RESOLUTION)"; then
-              echo "Error: Failed to commit conflict resolution"
-              git status
-              exit 1
-            fi
+            # Commit the conflicted state without resolving
+            git commit --allow-empty -m "Conflicted revert of $COMMIT from $FEATURE (manual resolution required)"
 
             echo "Pushing conflicted branch $BRANCH..."
             if ! git push origin "$BRANCH"; then
@@ -137,39 +96,25 @@ jobs:
 
             echo "Creating PR for manual conflict resolution..."
             CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || echo "Unknown")
-            if [ -n "$CONFLICTED_FILES" ]; then
-              PR_BODY="Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
+            PR_BODY="Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
 
-              **Steps to resolve:**
-              1. Open the 'Files changed' tab in this PR to view conflicts.
-              2. Review the applied resolution (strategy: $RESOLUTION) for files like $CONFLICTED_FILES.
-              3. Edit files to keep the HEAD version, delete them, or resolve conflict markers (<<<<<<<, =======, >>>>>>>).
-              4. Commit changes directly in GitHub or locally.
-              5. Merge the PR once the resolution is confirmed.
+            **Steps to resolve:**
+            1. Open the 'Files changed' tab in this PR to view conflicts.
+            2. For modify/delete conflicts (e.g., $CONFLICTED_FILES), decide whether to:
+               - Keep the modified version from HEAD (use 'git add <file>').
+               - Accept the deletion from the revert (use 'git rm <file>').
+            3. Resolve any conflict markers (<<<<<<<, =======, >>>>>>>) if present.
+            4. Commit changes directly in GitHub or locally with 'git commit' and 'git push'.
+            5. Merge the PR once conflicts are resolved.
 
-              **Conflicted files:**
-              \`\`\`
-              $CONFLICTED_FILES
-              \`\`\`
+            **Conflicted files:**
+            \`\`\`
+            $CONFLICTED_FILES
+            \`\`\`
 
-              **Resolution applied:**
-              - Strategy: $RESOLUTION
-              - Commit SHA: $COMMIT
-              - Feature branch: $FEATURE"
-            else
-              PR_BODY="Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
-
-              **Steps to resolve:**
-              1. Review the staged resolution (strategy: $RESOLUTION) in the 'Files changed' tab.
-              2. If the resolution is incorrect (e.g., keeping or deleting $CONFLICTED_FILES), edit or remove files as needed.
-              3. Commit changes directly in GitHub or locally.
-              4. Merge the PR once the resolution is confirmed.
-
-              **Resolution applied:**
-              - Strategy: $RESOLUTION
-              - Commit SHA: $COMMIT
-              - Feature branch: $FEATURE"
-            fi
+            **Commit details:**
+            - Commit SHA: $COMMIT
+            - Feature branch: $FEATURE"
 
             if ! gh pr create \
               --base dev \
