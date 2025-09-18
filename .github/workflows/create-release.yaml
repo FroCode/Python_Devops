@@ -1,0 +1,72 @@
+name: Create Tag and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose: patch (auto bump) or release (manual version)"
+        required: true
+        type: choice
+        options:
+          - patch
+          - release
+      version:
+        description: "Version (required if mode=release, ignored for patch)"
+        required: false
+        default: ""
+
+jobs:
+  tag_and_release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Fetch tags
+        run: git fetch --tags
+
+      - name: Determine version
+        id: version
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ "$MODE" = "patch" ]; then
+            LAST_TAG=$(git describe --tags `git rev-list --tags --max-count=1` || echo "0.0.0")
+            echo "Last tag: $LAST_TAG"
+            IFS='.' read -r major minor patch <<< "$LAST_TAG"
+            patch=$((patch+1))
+            NEW_VERSION="$major.$minor.$patch"
+          else
+            NEW_VERSION="${{ github.event.inputs.version }}"
+            if [ -z "$NEW_VERSION" ]; then
+              echo "❌ Version is required when mode=release"
+              exit 1
+            fi
+          fi
+          
+          # Check if tag exists
+          if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
+            echo "❌ Tag v$NEW_VERSION already exists!"
+            exit 1
+          fi
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
+          echo "✅ New version will be v$NEW_VERSION"
+
+      - name: Create tag
+        run: |
+          git tag "v${{ env.new_version }}"
+          git push origin "v${{ env.new_version }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.new_version }}
+          name: Release v${{ env.new_version }}
+          body: |
+            🚀 Release v${{ env.new_version }}
+            Created automatically via GitHub Actions.
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
