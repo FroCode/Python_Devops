@@ -1,3 +1,4 @@
+name: merge-into-dev
 on:
   workflow_dispatch:
     inputs:
