@@ -107,9 +107,9 @@ jobs:
               done
             fi
 
-            # Commit the conflict resolution
-            if ! git commit -m "Conflicted revert of $COMMIT from $FEATURE"; then
-              echo "Error: Failed to commit conflict resolution"
+            # Continue the revert after staging conflicts
+            if ! git revert --continue; then
+              echo "Error: Failed to continue revert after staging conflicts"
               git status
               exit 1
             fi
@@ -122,11 +122,8 @@ jobs:
 
             echo "Creating PR for manual conflict resolution..."
             CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || echo "Unknown")
-            if ! gh pr create \
-              --base dev \
-              --head "$BRANCH" \
-              --title "Resolve conflicts: Revert $COMMIT from $FEATURE" \
-              --body "Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
+            if [ -n "$CONFLICTED_FILES" ]; then
+              PR_BODY="Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
 
               **Steps to resolve:**
               1. Open the 'Files changed' tab in this PR to view conflicts.
@@ -141,7 +138,26 @@ jobs:
 
               **Commit details:**
               - Commit SHA: $COMMIT
-              - Feature branch: $FEATURE"; then
+              - Feature branch: $FEATURE"
+            else
+              PR_BODY="Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
+
+              **Steps to resolve:**
+              1. Review the staged resolution (e.g., kept or deleted files) in the 'Files changed' tab.
+              2. If the resolution is incorrect, edit files or remove them as needed.
+              3. Commit changes directly in GitHub or locally.
+              4. Merge the PR once the resolution is confirmed.
+
+              **Commit details:**
+              - Commit SHA: $COMMIT
+              - Feature branch: $FEATURE"
+            fi
+
+            if ! gh pr create \
+              --base dev \
+              --head "$BRANCH" \
+              --title "Resolve conflicts: Revert $COMMIT from $FEATURE" \
+              --body "$PR_BODY"; then
               echo "Error: Failed to create PR"
               exit 1
             fi
