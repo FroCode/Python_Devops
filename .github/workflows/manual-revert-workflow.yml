@@ -1,4 +1,5 @@
 name: Revert Squash Merge Workflow
+
 on:
   workflow_dispatch:
     inputs:
@@ -85,8 +86,9 @@ jobs:
             # Create a new branch for the conflicted state
             git checkout -b "$BRANCH"
 
-            # Commit the conflicted state without resolving
-            git commit --allow-empty -m "Conflicted revert of $COMMIT from $FEATURE (manual resolution required)"
+            # Stage conflicted files with conflict markers so commit can succeed
+            git add -A
+            git commit -m "Conflicted revert of $COMMIT from $FEATURE (manual resolution required)"
 
             echo "Pushing conflicted branch $BRANCH..."
             if ! git push origin "$BRANCH"; then
@@ -100,11 +102,11 @@ jobs:
 
             **Steps to resolve:**
             1. Open the 'Files changed' tab in this PR to view conflicts.
-            2. For modify/delete conflicts (e.g., $CONFLICTED_FILES), decide whether to:
-               - Keep the modified version from HEAD (use 'git add <file>').
-               - Accept the deletion from the revert (use 'git rm <file>').
-            3. Resolve any conflict markers (<<<<<<<, =======, >>>>>>>) if present.
-            4. Commit changes directly in GitHub or locally with 'git commit' and 'git push'.
+            2. Resolve any conflict markers (\`\`\`<<<<<<<\`\`\`, \`\`\`=======\`\`\`, \`\`\`>>>>>>>\`\`\`) directly in GitHub or locally.
+            3. Decide whether to:
+               - Keep the modified version from HEAD (stage with \`git add <file>\`).
+               - Accept the deletion from the revert (stage with \`git rm <file>\`).
+            4. Once resolved, commit the changes and push them.
             5. Merge the PR once conflicts are resolved.
 
             **Conflicted files:**
