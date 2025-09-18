@@ -69,7 +69,7 @@ jobs:
 
       - name: Merge release branch into test environment
         run: |
-          TEST_BRANCH="test-env"
+          TEST_BRANCH="test"
           git checkout $TEST_BRANCH
           git pull origin $TEST_BRANCH
           git merge --no-ff ${{ env.release_branch }} -m "Merge ${{ env.release_branch }} into $TEST_BRANCH for testing"
