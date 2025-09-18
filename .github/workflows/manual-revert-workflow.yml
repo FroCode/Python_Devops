@@ -81,9 +81,38 @@ jobs:
           if [ $STATUS -ne 0 ]; then
             echo "Conflict detected for $COMMIT"
             echo "Staging conflicted files..."
-            git status
-            git add .
-            git commit -m "Conflicted revert of $COMMIT from $FEATURE"
+
+            # Handle modify/delete and other conflicts
+            CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || echo "")
+            if [ -n "$CONFLICTED_FILES" ]; then
+              for FILE in $CONFLICTED_FILES; do
+                if [ -f "$FILE" ]; then
+                  echo "Staging modified file: $FILE"
+                  git add "$FILE"
+                else
+                  echo "Staging deleted file: $FILE"
+                  git rm "$FILE"
+                fi
+              done
+            else
+              echo "No conflicted files found, checking unmerged paths..."
+              git status --porcelain | grep '^U' | awk '{print $2}' | while read -r FILE; do
+                if [ -f "$FILE" ]; then
+                  echo "Staging unmerged file: $FILE"
+                  git add "$FILE"
+                else
+                  echo "Staging deleted unmerged file: $FILE"
+                  git rm "$FILE"
+                fi
+              done
+            fi
+
+            # Commit the conflict resolution
+            if ! git commit -m "Conflicted revert of $COMMIT from $FEATURE"; then
+              echo "Error: Failed to commit conflict resolution"
+              git status
+              exit 1
+            fi
 
             echo "Pushing conflicted branch $BRANCH..."
             if ! git push origin "$BRANCH"; then
@@ -101,7 +130,7 @@ jobs:
 
               **Steps to resolve:**
               1. Open the 'Files changed' tab in this PR to view conflicts.
-              2. Edit files to resolve conflict markers (<<<<<<<, =======, >>>>>>>).
+              2. Edit files to resolve conflict markers (<<<<<<<, =======, >>>>>>>) or confirm deletion.
               3. Commit changes directly in GitHub or locally.
               4. Merge the PR once conflicts are resolved.
 
