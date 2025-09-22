@@ -61,19 +61,12 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
-      - name: Authenticate GitHub CLI
-        run: |
-          gh auth login --with-token <<< "${{ secrets.PAT }}"
-
       - name: Revert latest squash merge commit
         id: revert
         run: |
           set -e
           COMMIT="${{ steps.find_commit.outputs.commit_sha }}"
           FEATURE="${{ steps.normalize.outputs.normalized_branch }}"
-          SHORT_HASH=$(echo "$COMMIT" | cut -c1-7)
-          TIMESTAMP=$(date +%s)
-          BRANCH="revert-conflict/$FEATURE/$SHORT_HASH-$TIMESTAMP"
 
           echo "Attempting to revert $COMMIT from $FEATURE..."
 
@@ -84,55 +77,11 @@ jobs:
           set -e
 
           if [ $STATUS -ne 0 ]; then
-            echo "Conflict detected for $COMMIT"
-            echo "Creating branch for manual conflict resolution..."
-            
-            # Create a branch from current dev
-            git checkout -b "$BRANCH"
-
-            # Stage all files (conflicted files will keep conflict markers)
-            git add -A
-            git commit -m "Conflicted revert of $COMMIT from $FEATURE (manual resolution required)"
-
-            echo "Pushing conflicted branch $BRANCH..."
-            git push origin "$BRANCH"
-
-            # Prepare PR body safely
-            CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || echo "Unknown")
-                        PR_BODY=$(cat <<EOF
-            Automatic PR: Conflicts occurred while reverting $COMMIT from branch '$FEATURE'.
-
-            **Steps to resolve:**
-            1. Open the 'Files changed' tab in this PR to view conflicts.
-            2. Resolve any conflict markers (\`\`\`<<<<<<<\`\`\`, \`\`\`=======\`\`\`, \`\`\`>>>>>>>\`\`\`) directly in GitHub or locally.
-            3. Decide whether to:
-              - Keep the modified version from HEAD (stage with \`git add <file>\`).
-              - Accept the deletion from the revert (stage with \`git rm <file>\`).
-            4. Once resolved, commit the changes and push them.
-            5. Merge the PR once conflicts are resolved.
-
-            **Conflicted files:**
-            \`\`\`
-            $CONFLICTED_FILES
-            \`\`\`
-
-            **Commit details:**
-            - Commit SHA: $COMMIT
-            - Feature branch: $FEATURE
-            EOF
-            )
-
-            echo "$PR_BODY" > pr_body.txt
-
-            echo "Creating PR for manual conflict resolution..."
-            gh pr create \
-              --base dev \
-              --head "$BRANCH" \
-              --title "Resolve conflicts: Revert $COMMIT from $FEATURE" \
-              --body-file pr_body.txt
-
+            echo "Error: Conflict detected while reverting $COMMIT from $FEATURE"
+            echo "Aborting revert due to conflicts. No changes have been made."
+            git revert --abort
             echo "conflict=true" >> $GITHUB_OUTPUT
-            exit 0
+            exit 1
           fi
 
           # If revert succeeds, commit and mark no conflict
