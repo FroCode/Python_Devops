@@ -108,11 +108,15 @@ jobs:
 
       - name: Merge release branch into main
         run: |
+          RELEASE_BRANCH="${{ needs.release.outputs.release_branch }}"
+          # Make sure we fetch the release branch before merging
+          git fetch origin $RELEASE_BRANCH:$RELEASE_BRANCH
           git checkout main
           git pull origin main
-          git merge --no-ff ${{ needs.release.outputs.release_branch }} -m "Merge release ${{ needs.release.outputs.release_branch }} into main"
+          git merge --no-ff $RELEASE_BRANCH -m "Merge $RELEASE_BRANCH into main"
           git push origin main
-          echo "✅ Merged release branch into main"
+          echo "✅ Merged $RELEASE_BRANCH into main"
+
 
       - name: Create tag
         run: |
