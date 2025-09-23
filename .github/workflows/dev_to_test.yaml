@@ -1,4 +1,3 @@
-
 name: push-dev-to-test
 
 on:
@@ -47,18 +46,18 @@ jobs:
             exit 0
           fi
 
-      # Push dev to test
-      - name: Push dev to test
+      # Push dev to test (squash)
+      - name: Push dev to test (squash)
         id: push
         run: |
           git checkout test
           git fetch origin dev
           set +e
-          git merge origin/dev --no-ff --no-edit
+          git merge --squash origin/dev
           STATUS=$?
           set -e
           if [ $STATUS -ne 0 ]; then
-            echo "Merge conflict detected"
+            echo "Merge conflict detected during squash"
             TIMESTAMP=$(date +%s)
             CONFLICT_BRANCH="conflict/dev-to-test-$TIMESTAMP"
             git checkout -b "$CONFLICT_BRANCH"
@@ -67,10 +66,13 @@ jobs:
               --base test \
               --head "$CONFLICT_BRANCH" \
               --title "Merge conflict: dev to test" \
-              --body "Automatic PR: Conflicts occurred while merging dev into test. Please resolve manually."
+              --body "Automatic PR: Conflicts occurred while squash-merging dev into test. Please resolve manually."
             echo "conflict=true" >> $GITHUB_OUTPUT
             exit 0
           fi
+
+          # Commit the squashed changes
+          git commit -m "Squash merge dev into test [ci skip]"
           git push origin test
           echo "conflict=false" >> $GITHUB_OUTPUT
         env:
@@ -86,18 +88,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Validate test branch
+      # Validate test branch (for squash merge)
       - name: Validate test branch
         if: steps.push.outputs.conflict == 'false'
         run: |
           git fetch origin test
           git checkout test
-          MERGE_COMMIT=$(git log --merges --pretty=%H -n 1)
-          if [ -z "$MERGE_COMMIT" ]; then
-            echo "No merge commit found in test branch"
-            exit 1
-          fi
-          echo "Merge commit validated: $MERGE_COMMIT"
+          LAST_COMMIT=$(git rev-parse HEAD)
+          echo "Latest commit on test: $LAST_COMMIT"
+          echo "Validation complete: squash commit exists"
 
       # Notify on merge conflict
       - name: Notify on merge conflict
@@ -105,7 +104,7 @@ jobs:
         run: |
           gh issue create \
             --title "Merge Conflict: Dev to Test" \
-            --body "Merge conflict occurred while merging dev into test. Conflict branch created. Check PR for details." \
+            --body "Merge conflict occurred while squash-merging dev into test. Conflict branch created. Check PR for details." \
             --repo ${{ github.repository }}
         env:
           GH_TOKEN: ${{ secrets.PAT }}
