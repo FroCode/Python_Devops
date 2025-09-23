@@ -49,12 +49,24 @@ jobs:
         id: check_revert
         run: |
           COMMIT="${{ steps.find_commit.outputs.commit_sha }}"
-          REVERT_CHECK=$(git log dev --grep="Revert squash merge $COMMIT" --pretty=%H -n 1)
-          if [ -n "$REVERT_CHECK" ]; then
-            echo "Error: Commit $COMMIT has already been reverted in dev"
+          FEATURE="${{ steps.normalize.outputs.normalized_branch }}"
+          # Search for the latest commit related to the feature branch (merge or revert)
+          LATEST_ACTION=$(git log dev --grep="from .*$FEATURE\|Revert \"$FEATURE\"" --pretty=%s -n 1)
+          if [ -z "$LATEST_ACTION" ]; then
+            echo "Error: No relevant commit (merge or revert) found for '$FEATURE'"
             exit 1
           fi
-          echo "revert_status=not_reverted" >> $GITHUB_OUTPUT
+          if echo "$LATEST_ACTION" | grep -q "Revert \"$FEATURE\""; then
+            echo "Error: Last operation for '$FEATURE' is a revert. Cannot revert again."
+            echo "revert_status=already_reverted" >> $GITHUB_OUTPUT
+            exit 1
+          elif echo "$LATEST_ACTION" | grep -q "from .*$FEATURE"; then
+            echo "Last operation for '$FEATURE' is a merge. Proceeding with revert."
+            echo "revert_status=not_reverted" >> $GITHUB_OUTPUT
+          else
+            echo "Error: Unexpected commit message format for '$FEATURE'"
+            exit 1
+          fi
 
       - name: Configure Git
         run: |
@@ -92,7 +104,7 @@ jobs:
           fi
 
           # If revert succeeds, commit and mark no conflict
-          git commit -m "Revert squash merge $COMMIT from $FEATURE"
+          git commit -m "Revert \"$FEATURE\""
           echo "conflict=false" >> $GITHUB_OUTPUT
 
       - name: Push revert to dev
