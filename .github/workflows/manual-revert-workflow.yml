@@ -96,9 +96,8 @@ jobs:
           set -e
 
           if [ $STATUS -ne 0 ]; then
-            echo "Conflict detected for $COMMIT"
-            echo "Aborting revert due to conflicts. No changes have been made."
             git revert --abort
+            echo "Error: Cannot revert '$FEATURE' because a conflict occurred."
             echo "conflict=true" >> $GITHUB_OUTPUT
             exit 1
           fi
