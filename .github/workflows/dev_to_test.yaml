@@ -14,6 +14,7 @@ on:
 
 jobs:
   push-to-test:
+    
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
 
@@ -47,6 +48,7 @@ jobs:
           fi
 
       # Push dev to test (squash)
+            # Push dev to test (squash)
       - name: Push dev to test (squash)
         id: push
         run: |
@@ -71,12 +73,20 @@ jobs:
             exit 0
           fi
 
+          # ✅ Check if there are staged changes before committing
+          if git diff --cached --quiet; then
+            echo "✅ No squash changes - test already matches dev (likely after revert)."
+            echo "conflict=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           # Commit the squashed changes
           git commit -m "Squash merge dev into test [ci skip]"
           git push origin test
           echo "conflict=false" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.PAT }}
+
 
       # Force push if requested
       - name: Force push dev to test
