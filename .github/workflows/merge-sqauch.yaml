@@ -1,4 +1,5 @@
-name: merge-into-dev
+name: squash-merge-into-dev
+
 on:
   workflow_dispatch:
     inputs:
@@ -15,183 +16,135 @@ permissions:
 
 jobs:
   squash-merge:
+    name: Squash merge PR into dev
     runs-on: ubuntu-latest
-
+    
     steps:
-      # Install GitHub CLI
       - name: Install GitHub CLI
         run: |
-          type -p curl >/dev/null || sudo apt update && sudo apt install curl -y
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update
-          sudo apt install gh -y
+          type -p gh >/dev/null || {
+            type -p curl >/dev/null || sudo apt update && sudo apt install -y curl
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+              | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+              | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install -y gh
+          }
           gh version
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.PAT }}
 
-      # Configure Git
       - name: Configure Git
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
-      # Validate PR number and get PR details
       - name: Get PR branch name and base branch
         id: pr_info
         run: |
           if ! [[ "${{ github.event.inputs.pr_number }}" =~ ^[0-9]+$ ]]; then
-            echo "❌ Invalid PR number: ${{ github.event.inputs.pr_number }}"
+            echo "Invalid PR number: ${{ github.event.inputs.pr_number }}"
             exit 1
           fi
-          PR_INFO=$(gh pr view ${{ github.event.inputs.pr_number }} --json headRefName,baseRefName -q "{ \"branch_name\": .headRefName, \"base_branch\": .baseRefName }" || {
-            echo "❌ Failed to fetch PR #${{ github.event.inputs.pr_number }}. Ensure PR exists and PAT has correct permissions."
-            exit 1
-          })
-          BRANCH_NAME=$(echo "$PR_INFO" | jq -r .branch_name)
-          BASE_BRANCH=$(echo "$PR_INFO" | jq -r .base_branch)
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
-          echo "base_branch=$BASE_BRANCH" >> $GITHUB_ENV
-          echo "PR head branch: $BRANCH_NAME"
-          echo "PR base branch: $BASE_BRANCH"
+
+          PR_INFO=$(gh pr view ${{ github.event.inputs.pr_number }} \
+            --json headRefName,baseRefName \
+            -q '{ "branch_name": .headRefName, "base_branch": .baseRefName }') || {
+              echo "❌ Failed to fetch PR details"
+              exit 1
+            }
+
+          echo "$PR_INFO"
+          echo "branch_name=$(echo "$PR_INFO" | jq -r .branch_name)" >> $GITHUB_ENV
+          echo "base_branch=$(echo "$PR_INFO" | jq -r .base_branch)" >> $GITHUB_ENV
+
           if [ "$BASE_BRANCH" != "dev" ]; then
-            echo "❌ PR #${{ github.event.inputs.pr_number }} base branch is '$BASE_BRANCH', expected 'dev'"
+            echo "❌ PR must target 'dev', not '$BASE_BRANCH'"
             exit 1
           fi
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Check if last commit on dev is from the target branch or a revert
-      - name: Check if commit exists
+      - name: Validate branch name
+        run: |
+          if [[ ! "${{ env.branch_name }}" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+            echo "❌ Invalid feature branch name"
+            exit 1
+          fi
+          if [[ "${{ env.branch_name }}" == "main" || "${{ env.branch_name }}" == "dev" ]]; then
+            echo "❌ Branch cannot be main or dev"
+            exit 1
+          fi
+
+      - name: Check duplicate squash commit on dev
         id: check_commit
         run: |
-          git fetch origin dev --force
-          git checkout dev
+          git fetch origin dev
           LAST_COMMIT_MSG=$(git log -1 --pretty=%s origin/dev)
-          COMMIT_MSG="from ${{ env.branch_name }}"
-          REVERT_MSG="Revert 'from ${{ env.branch_name }}'"
-          echo "Raw last commit message: '$LAST_COMMIT_MSG'"
-          # Normalize commit messages for comparison (trim whitespace, convert to lowercase)
-          NORMALIZED_LAST_COMMIT_MSG=$(echo "$LAST_COMMIT_MSG" | tr -s ' ' | tr '[:upper:]' '[:lower:]')
-          NORMALIZED_COMMIT_MSG=$(echo "$COMMIT_MSG" | tr -s ' ' | tr '[:upper:]' '[:lower:]')
-          NORMALIZED_REVERT_MSG=$(echo "$REVERT_MSG" | tr -s ' ' | tr '[:upper:]' '[:lower:]')
-          echo "Normalized last commit message: '$NORMALIZED_LAST_COMMIT_MSG'"
-          if [ "$NORMALIZED_LAST_COMMIT_MSG" = "$NORMALIZED_COMMIT_MSG" ]; then
-            echo "✅ Last commit matches '$COMMIT_MSG', triggering revert workflow"
+
+          echo "Latest commit on dev: $LAST_COMMIT_MSG"
+
+          if [[ "${LAST_COMMIT_MSG,,}" == "from ${{ env.branch_name }},," ]]; then
             echo "duplicate=true" >> $GITHUB_OUTPUT
-          elif [ "$NORMALIZED_LAST_COMMIT_MSG" = "$NORMALIZED_REVERT_MSG" ]; then
-            echo "ℹ️ Last commit matches '$REVERT_MSG', skipping revert workflow as changes are already reverted"
-            echo "duplicate=false" >> $GITHUB_OUTPUT
           else
-            echo "ℹ️ Last commit is '$LAST_COMMIT_MSG', no duplicate or revert found, skipping revert workflow"
             echo "duplicate=false" >> $GITHUB_OUTPUT
           fi
-        env:
-          GH_TOKEN: ${{ secrets.PAT }}
 
-      # Trigger revert workflow if duplicate commit exists
-      - name: Trigger revert workflow
-        if: steps.check_commit.outputs.duplicate == 'true'
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.PAT }}
-          repository: ${{ github.repository }}
-          event-type: trigger-revert
-          client-payload: '{"branch_name": "${{ env.branch_name }}"}'
-
-      # Wait for revert workflow completion (polling)
-      - name: Wait for revert workflow to finish
+      - name: Trigger revert workflow if duplicate detected
         if: steps.check_commit.outputs.duplicate == 'true'
         run: |
-          echo "⏳ Waiting for revert workflow to complete..."
-          ATTEMPTS=0
-          MAX_ATTEMPTS=30
-          while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
-            STATUS=$(gh run list --workflow manual-revert-workflow.yml --json status,conclusion -q '.[0] | select(.status == "completed") | .conclusion')
-            if [ -n "$STATUS" ]; then
-              echo "✅ Revert workflow completed with conclusion: $STATUS"
-              if [ "$STATUS" != "success" ]; then
-                echo "❌ Revert workflow failed!"
-                exit 1
-              fi
-              break
-            fi
-            echo "Still running... waiting 10s"
-            ATTEMPTS=$((ATTEMPTS+1))
-            sleep 10
-          done
-          if [ $ATTEMPTS -eq $MAX_ATTEMPTS ]; then
-            echo "❌ Timeout waiting for revert workflow to complete"
-            exit 1
-          fi
+          echo "Duplicate commit detected — triggering revert workflow..."
+          gh workflow run "Revert-from-dev" -f branch_name="${{ env.branch_name }}"
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Check PR mergeability and status checks
       - name: Check PR mergeability and status checks
         id: check_mergeability
         run: |
-          echo "Checking PR #${{ github.event.inputs.pr_number }} mergeability..."
-          MERGEABLE_STATE=$(gh pr view ${{ github.event.inputs.pr_number }} --json mergeable -q ".mergeable")
-          echo "PR mergeable state: $MERGEABLE_STATE"
-          if [ "$MERGEABLE_STATE" != "MERGEABLE" ]; then
-            echo "❌ PR #${{ github.event.inputs.pr_number }} is not mergeable (state: $MERGEABLE_STATE)."
+          MERGEABLE=$(gh pr view ${{ github.event.inputs.pr_number }} --json mergeable -q ".mergeable")
+
+          if [ "$MERGEABLE" == "CONFLICTING" ]; then
             echo "mergeable=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          echo "Checking required status checks..."
-          STATUS_CHECKS=$(gh pr view ${{ github.event.inputs.pr_number }} --json statusCheckRollup -q ".statusCheckRollup[] | select(.status == \"FAILURE\" or .status == \"PENDING\") | .name" || echo "")
-          if [ -n "$STATUS_CHECKS" ]; then
-            echo "❌ Required status checks are failing or pending: $STATUS_CHECKS"
+
+          FAILING=$(gh pr view ${{ github.event.inputs.pr_number }} \
+            --json statusCheckRollup -q '.statusCheckRollup[] | select(.status == "FAILURE") | .name' || true)
+          
+          if [ -n "$FAILING" ]; then
             echo "mergeable=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          echo "✅ PR is mergeable and status checks are passing"
+
           echo "mergeable=true" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Perform squash merge into dev using gh pr merge
       - name: Squash merge PR into dev
         id: merge
         if: steps.check_mergeability.outputs.mergeable == 'true'
         run: |
-          echo "Attempting to squash merge PR #${{ github.event.inputs.pr_number }} into dev..."
-          set +e
-          for attempt in {1..3}; do
-            gh pr merge ${{ github.event.inputs.pr_number }} --squash --body "✅ Successfully squash merged into dev from ${{ env.branch_name }}" --subject "from ${{ env.branch_name }}"
-            STATUS=$?
-            if [ $STATUS -eq 0 ]; then
-              echo "✅ Merge succeeded on attempt $attempt"
-              echo "conflict=false" >> $GITHUB_OUTPUT
-              break
-            fi
-            echo "⚠️ Merge failed on attempt $attempt, retrying in 10s..."
-            ERROR_MSG=$(gh pr merge ${{ github.event.inputs.pr_number }} --squash --body "Test merge" --subject "from ${{ env.branch_name }}" 2>&1 || true)
-            echo "Error message: $ERROR_MSG"
-            sleep 10
-          done
-          set -e
-          if [ $STATUS -ne 0 ]; then
-            echo "❌ Merge failed after 3 attempts!"
-            echo "conflict=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+          echo "Squash merging PR #${{ github.event.inputs.pr_number }}..."
+
+          gh pr merge ${{ github.event.inputs.pr_number }} \
+            --squash \
+            --subject "from ${{ env.branch_name }}" \
+            --body "Squash merge from ${{ env.branch_name }}"
+
+          echo "conflict=false" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      # Fail workflow if merge conflict or other issue detected
-      - name: Fail on conflict or merge failure
+      - name: Fail if merge failed
         if: steps.merge.outputs.conflict == 'true'
         run: |
-          echo "❌ Merge conflict or failure detected when merging ${{ env.branch_name }} into dev."
-          echo "Please resolve the conflict manually via a PR or check the workflow logs for details."
+          echo "❌ Merge failed — see logs above"
           exit 1
