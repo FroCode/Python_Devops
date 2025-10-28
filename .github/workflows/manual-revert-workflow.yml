@@ -9,7 +9,6 @@ on:
 
 jobs:
   revert-squash-commit:
-    name: Revert last squash merge from feature branch
     runs-on: ubuntu-latest
 
     steps:
@@ -35,17 +34,15 @@ jobs:
           git checkout dev
           git pull origin dev
 
-      - name: Find latest squash merge commit for this feature
+      - name: Find latest squash merge commit
         id: find_commit
         run: |
           PATTERN="${{ steps.normalize.outputs.normalized_branch }}"
           COMMIT=$(git log dev --grep="from .*$PATTERN" --pretty=%H -n 1)
-
           if [ -z "$COMMIT" ]; then
             echo "Error: No squash merge commit found in dev for '$PATTERN'"
             exit 1
           fi
-
           echo "commit_sha=$COMMIT" >> $GITHUB_OUTPUT
 
       - name: Check if commit already reverted
@@ -53,19 +50,21 @@ jobs:
         run: |
           COMMIT="${{ steps.find_commit.outputs.commit_sha }}"
           FEATURE="${{ steps.normalize.outputs.normalized_branch }}"
-
+          # Search for the latest commit related to the feature branch (merge or revert)
           LATEST_ACTION=$(git log dev --grep="from .*$FEATURE\|Revert \"$FEATURE\"" --pretty=%s -n 1)
-
-          if echo "$LATEST_ACTION" | grep -q "Revert \"$FEATURE\""; then
-            echo "Error: Last operation for '$FEATURE' is already a revert."
-            echo "revert_status=already_reverted" >> $GITHUB_OUTPUT
+          if [ -z "$LATEST_ACTION" ]; then
+            echo "Error: No relevant commit (merge or revert) found for '$FEATURE'"
             exit 1
           fi
-
-          if echo "$LATEST_ACTION" | grep -q "from .*$FEATURE"; then
+          if echo "$LATEST_ACTION" | grep -q "Revert \"$FEATURE\""; then
+            echo "Error: Last operation for '$FEATURE' is a revert. Cannot revert again."
+            echo "revert_status=already_reverted" >> $GITHUB_OUTPUT
+            exit 1
+          elif echo "$LATEST_ACTION" | grep -q "from .*$FEATURE"; then
+            echo "Last operation for '$FEATURE' is a merge. Proceeding with revert."
             echo "revert_status=not_reverted" >> $GITHUB_OUTPUT
           else
-            echo "Error: Could not determine last commit action."
+            echo "Error: Unexpected commit message format for '$FEATURE'"
             exit 1
           fi
 
@@ -76,29 +75,33 @@ jobs:
 
       - name: Authenticate GitHub CLI
         run: |
-          echo "${{ secrets.PAT }}" | gh auth login --with-token
+          gh auth login --with-token <<< "${{ secrets.PAT }}"
 
-      - name: Attempt revert
+      - name: Revert latest squash merge commit
         id: revert
         run: |
+          set -e
           COMMIT="${{ steps.find_commit.outputs.commit_sha }}"
           FEATURE="${{ steps.normalize.outputs.normalized_branch }}"
 
-          echo "Reverting commit $COMMIT for feature '$FEATURE'..."
+          echo "Attempting to revert $COMMIT from $FEATURE..."
 
+          # Attempt revert without committing
           set +e
           git revert --no-commit "$COMMIT"
           STATUS=$?
           set -e
-
           if [ $STATUS -ne 0 ]; then
             git revert --abort
+            echo "Error: Cannot revert '$FEATURE' because a conflict occurred."
             echo "conflict=true" >> $GITHUB_OUTPUT
             exit 1
           fi
 
+          # If revert succeeds, commit and mark no conflict
           git commit -m "Revert \"$FEATURE\""
           echo "conflict=false" >> $GITHUB_OUTPUT
+
 
       - name: Push revert to dev
         if: steps.revert.outputs.conflict == 'false'

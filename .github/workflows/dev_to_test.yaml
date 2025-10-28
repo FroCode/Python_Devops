@@ -2,7 +2,7 @@ name: push-dev-to-test
 
 on:
   workflow_run:
-    workflows: ["manual-revert-workflow"]
+    workflows: ["squash-merge-into-dev", "Revert-from-dev" ]
     types:
       - completed
   workflow_dispatch:
