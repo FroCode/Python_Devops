@@ -108,14 +108,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT }}
           
-      - name: Trigger manual-revert workflow
+      - name: Trigger Revert-from-dev workflow
         if: steps.check_commit.outputs.duplicate == 'true'
         id: trigger_revert
         run: |
           echo "Triggering revert workflow for branch: ${{ env.branch_name }}"
 
           for attempt in {1..3}; do
-            gh workflow run "manual-revert" \
+            gh workflow run "Revert-from-dev" \
               -f branch_name="${{ env.branch_name }}" \
               -r main
 
@@ -123,13 +123,13 @@ jobs:
             sleep 5
 
             RUN_ID=$(gh run list \
-              --workflow "manual-revert" \
+              --workflow "Revert-from-dev" \
               --branch main \
               --limit 1 \
               --json databaseId -q '.[0].databaseId')
 
             if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
-              echo "✅ Triggered manual-revert workflow with run ID: $RUN_ID"
+              echo "✅ Triggered Revert-from-dev workflow with run ID: $RUN_ID"
               echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
               break
             fi
@@ -139,24 +139,24 @@ jobs:
           done
 
           if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "❌ Failed to trigger manual-revert workflow after 3 attempts"
+            echo "❌ Failed to trigger Revert-from-dev workflow after 3 attempts"
             exit 1
           fi
         env:
           GH_TOKEN: ${{ secrets.PAT }}
 
-      - name: Wait for manual-revert workflow to finish
+      - name: Wait for Revert-from-dev workflow to finish
         if: steps.check_commit.outputs.duplicate == 'true'
         run: |
-          echo "⏳ Waiting for manual-revert.yml workflow (run ID: ${{ steps.trigger_revert.outputs.run_id }}) to complete for branch: ${{ env.branch_name }}"
+          echo "⏳ Waiting for Revert-from-dev.yml workflow (run ID: ${{ steps.trigger_revert.outputs.run_id }}) to complete for branch: ${{ env.branch_name }}"
           ATTEMPTS=0
           MAX_ATTEMPTS=30
           while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
             STATUS=$(gh run view "${{ steps.trigger_revert.outputs.run_id }}" --json status,conclusion -q '.conclusion')
             if [ -n "$STATUS" ]; then
-              echo " manual-revert workflow for branch '${{ env.branch_name }}' completed with: $STATUS"
+              echo " Revert-from-dev workflow for branch '${{ env.branch_name }}' completed with: $STATUS"
               if [ "$STATUS" != "success" ]; then
-                echo " manual-revert workflow failed!"
+                echo " Revert-from-dev workflow failed!"
                 exit 1
               fi
               break
@@ -166,7 +166,7 @@ jobs:
             sleep 10
           done
           if [ $ATTEMPTS -eq $MAX_ATTEMPTS ]; then
-            echo " Timeout waiting for manual-revert workflow (run ID: ${{ steps.trigger_revert.outputs.run_id }}) for '${{ env.branch_name }}' to complete"
+            echo " Timeout waiting for Revert-from-dev workflow (run ID: ${{ steps.trigger_revert.outputs.run_id }}) for '${{ env.branch_name }}' to complete"
             exit 1
           fi
         env:
